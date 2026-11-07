@@ -16,4 +16,6 @@ All notable changes to this project are documented here. The format follows
 - JSON reports (`agentcad.report/1`) and exit codes for agents; compact tables for people.
 - Standalone file commands: `measure`, `interfere`, `overhang`, `wall`, `fit`, `diff`.
 - Offscreen VTK renders (multi-view sheet, filled sections) and a local live three.js viewer.
+- Viewer safety: loopback-only Host check (blocks DNS rebinding), clear exit-2 errors for a busy `--port` or a
+  folder with no meshes, and automatic port selection that skips ports another server already answers on.
 - Agent skill (`skills/agentcad`) with design-for-printing, CadQuery and verification references.
