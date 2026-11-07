@@ -117,7 +117,7 @@ def _parser() -> argparse.ArgumentParser:
     p.add_argument("--views", default="iso,front,right,top")
     p.add_argument("--section", metavar="AXIS=MM", help="cut with a plane, for example z=10")
 
-    p = add("view", _view, "open the live 3D viewer", json_flag=False)
+    p = add("view", _view, "open the live 3D viewer")
     p.add_argument("inputs", nargs="*", metavar="PROJECT|PATH")
     p.add_argument("--port", type=int)
     p.add_argument("--no-open", action="store_true", help="do not open a browser")
@@ -355,7 +355,7 @@ def _render(args: argparse.Namespace) -> int:
 
 def _view(args: argparse.Namespace) -> int:
     try:
-        from .viewer.server import serve
+        from .viewer.server import NoMeshFilesError, PortInUseError, serve
     except ImportError as exc:
         raise UsageError(f"view is unavailable: {exc}") from exc
     inputs = args.inputs or ["."]
@@ -378,7 +378,10 @@ def _view(args: argparse.Namespace) -> int:
         bed = bed or tuple(project.printer.bed_xyz[:2])
     else:
         paths = inputs
-    serve(paths, port=args.port, open_browser=not args.no_open, bed=bed, colors=colors, recursive=args.recursive)
+    try:
+        serve(paths, port=args.port, open_browser=not args.no_open, bed=bed, colors=colors, recursive=args.recursive)
+    except (PortInUseError, NoMeshFilesError) as exc:
+        raise UsageError(str(exc)) from exc
     return 0
 
 

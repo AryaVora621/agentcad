@@ -1,6 +1,7 @@
 """agentcad viewer server - local three.js mesh viewer with live reload."""
 
 import argparse
+import errno
 import http.server
 import json
 import os
@@ -55,9 +56,29 @@ def parse_bed(bed_str: str | None) -> list[float] | None:
     return [float(m.group(1)), float(m.group(2))]
 
 
+def _port_in_use(port: int) -> bool:
+    """True when something accepts TCP connections on 127.0.0.1 or [::1] at this port.
+
+    A bind test alone misses listeners on other address families or wildcard addresses
+    when SO_REUSEADDR is set, and localhost can resolve to either family.
+    """
+    for family, host in ((socket.AF_INET, "127.0.0.1"), (socket.AF_INET6, "::1")):
+        try:
+            with socket.socket(family, socket.SOCK_STREAM) as s:
+                s.settimeout(0.2)
+                # A timeout means a listener with a full accept queue, which is still a listener.
+                if s.connect_ex((host, port)) in (0, errno.EAGAIN, errno.ETIMEDOUT):
+                    return True
+        except OSError:
+            continue  # includes IPv6 being unavailable
+    return False
+
+
 def find_free_port(start_port: int = 8765) -> int:
     """Find a free port on 127.0.0.1 starting from start_port."""
     for port in range(start_port, 65536):
+        if _port_in_use(port):
+            continue
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
             s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             try:
@@ -66,6 +87,25 @@ def find_free_port(start_port: int = 8765) -> int:
             except OSError:
                 continue
     raise RuntimeError("No available port found on 127.0.0.1")
+
+
+class PortInUseError(OSError):
+    """The requested port is already bound; raised instead of exiting so callers decide what to do."""
+
+    def __init__(self, port: int) -> None:
+        super().__init__(
+            errno.EADDRINUSE,
+            f"port {port} is already in use (another viewer may be running there); "
+            "pick another --port or omit it to use the next free one",
+        )
+        self.port = port
+
+    def __str__(self) -> str:
+        return self.strerror
+
+
+class NoMeshFilesError(ValueError):
+    """No supported mesh files were found in the given paths."""
 
 
 class FileManager:
@@ -95,8 +135,8 @@ class FileManager:
             self.step_hint_printed = True
 
         if not initial_files:
-            sys.stderr.write(f"Error: No supported mesh files found in: {', '.join(self.raw_paths)}\n")
-            sys.exit(2)
+            paths = ", ".join(self.raw_paths)
+            raise NoMeshFilesError(f"no supported mesh files (.stl, .obj, .3mf, .glb, .gltf, .ply) found in: {paths}")
 
         # Sort files by name initially so ID 0 corresponds to first file by name
         initial_files.sort(key=lambda p: (os.path.basename(p).lower(), p.lower()))
@@ -333,8 +373,15 @@ def start(
 
     ViewerHandler.manager = manager
 
+    if _port_in_use(port):
+        raise PortInUseError(port)
     server_address = ("127.0.0.1", port)
-    httpd = http.server.ThreadingHTTPServer(server_address, ViewerHandler)
+    try:
+        httpd = http.server.ThreadingHTTPServer(server_address, ViewerHandler)
+    except OSError as e:
+        if e.errno == errno.EADDRINUSE:
+            raise PortInUseError(port) from e
+        raise
 
     url = f"http://127.0.0.1:{port}/"
     print(f"agentcad view: {url}", flush=True)
@@ -362,31 +409,13 @@ def serve(
     recursive: bool = False,
 ) -> None:
     """Start the viewer server and block until KeyboardInterrupt."""
-    bed_list = list(bed) if bed else None
-    manager = FileManager(paths, recursive=recursive, bed=bed_list, color_rules=list(colors))
-
-    if port is None:
-        port = find_free_port(8765)
-
-    ViewerHandler.manager = manager
-
-    server_address = ("127.0.0.1", port)
-    httpd = http.server.ThreadingHTTPServer(server_address, ViewerHandler)
-
-    url = f"http://127.0.0.1:{port}/"
-    print(f"agentcad view: {url}", flush=True)
-
-    if open_browser:
-        try:
-            webbrowser.open(url)
-        except (OSError, webbrowser.Error):
-            pass
-
+    httpd, _url = start(paths, port=port, open_browser=open_browser, bed=bed, colors=colors, recursive=recursive)
     try:
-        httpd.serve_forever()
+        threading.Event().wait()
     except KeyboardInterrupt:
         pass
     finally:
+        httpd.shutdown()
         httpd.server_close()
 
 
@@ -421,14 +450,18 @@ def main(argv: list[str] | None = None) -> int:
 
     color_rules = list(args.color)
 
-    serve(
-        args.paths,
-        port=args.port,
-        open_browser=not args.no_open,
-        bed=bed_tuple,
-        colors=color_rules,
-        recursive=args.recursive,
-    )
+    try:
+        serve(
+            args.paths,
+            port=args.port,
+            open_browser=not args.no_open,
+            bed=bed_tuple,
+            colors=color_rules,
+            recursive=args.recursive,
+        )
+    except (PortInUseError, NoMeshFilesError) as exc:
+        print(f"agentcad view: error: {exc}", file=sys.stderr)
+        return 2
     return 0
 
 

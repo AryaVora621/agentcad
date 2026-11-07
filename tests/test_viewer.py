@@ -2,6 +2,9 @@
 
 import argparse
 import json
+import socket
+import subprocess
+import sys
 import time
 import urllib.error
 import urllib.request
@@ -323,3 +326,112 @@ def test_viewer_files_endpoint_forbidden_wrong_host_no_stl_bytes(tmp_path: Path)
     finally:
         server.shutdown()
         server.server_close()
+
+
+MSG = "already in use"
+CLI = "import sys; from agentcad.cli import main; sys.exit(main(sys.argv[1:]))"
+
+
+def _busy(tmp_path: Path):
+    stl = tmp_path / "box.stl"
+    create_test_stl(stl)
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.bind(("127.0.0.1", 0))
+    sock.listen(1)
+    return stl, sock, sock.getsockname()[1]
+
+
+def _run(args: list[str]) -> subprocess.CompletedProcess:
+    return subprocess.run([sys.executable, *args], capture_output=True, text=True, timeout=60, check=False)
+
+
+def test_cli_view_busy_port_exits_2_without_traceback(tmp_path: Path) -> None:
+    stl, sock, port = _busy(tmp_path)
+    with sock:
+        r = _run(["-c", CLI, "view", str(stl), "--no-open", "--port", str(port)])
+    assert r.returncode == 2
+    assert MSG in r.stderr and "Traceback" not in r.stderr
+
+
+def test_cli_view_busy_port_json(tmp_path: Path) -> None:
+    stl, sock, port = _busy(tmp_path)
+    with sock:
+        r = _run(["-c", CLI, "view", str(stl), "--no-open", "--port", str(port), "--json"])
+    doc = json.loads(r.stdout)
+    assert r.returncode == 2 and doc["schema"] == "agentcad.error/1" and doc["exit_code"] == 2
+    assert MSG in doc["error"]
+
+
+def test_standalone_server_busy_port_exits_2_without_traceback(tmp_path: Path) -> None:
+    stl, sock, port = _busy(tmp_path)
+    with sock:
+        r = _run(["-m", "agentcad.viewer.server", str(stl), "--no-open", "--port", str(port)])
+    assert r.returncode == 2
+    assert MSG in r.stderr and "Traceback" not in r.stderr
+
+
+def test_start_busy_port_raises_instead_of_exiting(tmp_path: Path) -> None:
+    from agentcad.viewer.server import PortInUseError
+
+    stl, sock, port = _busy(tmp_path)
+    with sock, pytest.raises(PortInUseError, match=MSG):
+        start([str(stl)], port=port, open_browser=False)
+
+
+def _listener(family: int, host: str, port: int) -> socket.socket:
+    sock = socket.socket(family, socket.SOCK_STREAM)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    sock.bind((host, port))
+    sock.listen(1)
+    return sock
+
+
+def test_busy_ports_on_other_address_families_are_skipped(tmp_path: Path) -> None:
+    from agentcad.viewer.server import PortInUseError, _port_in_use, find_free_port
+
+    stl = tmp_path / "box.stl"
+    create_test_stl(stl)
+    # Find a base port where both p (IPv6 wildcard) and p+1 (IPv4 wildcard) can be held.
+    for base in range(20000, 20200, 4):
+        socks = []
+        try:
+            socks.append(_listener(socket.AF_INET6, "::", base))
+            socks.append(_listener(socket.AF_INET, "0.0.0.0", base + 1))
+            break
+        except OSError:
+            for s in socks:
+                s.close()
+    else:
+        pytest.skip("no free port pair for IPv6 and IPv4 listeners")
+    try:
+        got = find_free_port(base)
+        assert got not in (base, base + 1) and not _port_in_use(got)
+        for busy in (base, base + 1):
+            with pytest.raises(PortInUseError):
+                start([str(stl)], port=busy, open_browser=False)
+    finally:
+        for s in socks:
+            s.close()
+
+
+def test_restart_on_same_explicit_port(tmp_path: Path) -> None:
+    stl = tmp_path / "box.stl"
+    create_test_stl(stl)
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        port = probe.getsockname()[1]
+    for _ in range(2):
+        httpd, url = start([str(stl)], port=port, open_browser=False)
+        assert url == f"http://127.0.0.1:{port}/"
+        httpd.shutdown()
+        httpd.server_close()
+
+
+def test_empty_dir_raises_and_cli_exits_2(tmp_path: Path) -> None:
+    from agentcad.viewer.server import NoMeshFilesError
+
+    with pytest.raises(NoMeshFilesError, match="no supported mesh files"):
+        start([str(tmp_path)], open_browser=False)
+    r = _run(["-c", CLI, "view", str(tmp_path), "--no-open"])
+    assert r.returncode == 2
+    assert "no supported mesh files" in r.stderr and "Traceback" not in r.stderr

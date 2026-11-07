@@ -52,9 +52,11 @@ def _trimesh_to_polydata(mesh: trimesh.Trimesh) -> vtk.vtkPolyData:
 
     # Triangles
     cells = vtk.vtkCellArray()
-    # Prepend 3 to each triangle for VTK format
-    faces_with_count = np.hstack([np.full((len(mesh.faces), 1), 3, dtype=np.int64), mesh.faces]).ravel()
-    cells.SetCells(len(mesh.faces), numpy_support.numpy_to_vtkIdTypeArray(faces_with_count, deep=True))
+    # Offsets/connectivity form of the cell array (SetCells is deprecated).
+    n = len(mesh.faces)
+    offsets = numpy_support.numpy_to_vtkIdTypeArray(np.arange(0, 3 * n + 1, 3, dtype=np.int64), deep=True)
+    connectivity = numpy_support.numpy_to_vtkIdTypeArray(np.asarray(mesh.faces, dtype=np.int64).ravel(), deep=True)
+    cells.SetData(offsets, connectivity)
     pd.SetPolys(cells)
 
     return pd
@@ -304,7 +306,7 @@ def _add_labels(
         tp.SetFontSize(size)
         tp.SetBold(bold)
         tp.SetColor(*color)
-        ren.AddActor2D(t)
+        ren.AddViewProp(t)
 
     # Top-left stack; every line must end above TOP_BAND_PX.
     s = _scale(h)
@@ -360,7 +362,7 @@ def _add_labels(
         actor2d.SetMapper(mapper)
         actor2d.GetProperty().SetColor(0.07, 0.08, 0.1)
         actor2d.GetProperty().SetLineWidth(max(1.0, 2.5 * s))
-        ren.AddActor2D(actor2d)
+        ren.AddViewProp(actor2d)
 
         # Label
         add_text(f"{length:.0f} mm", round(x0 + px / 2 - 30 * s), round(y0 + 18 * s), round(18 * s), False)
