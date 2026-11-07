@@ -1,0 +1,52 @@
+[build-system]
+requires = ["hatchling>=1.24"]
+build-backend = "hatchling.build"
+
+[project]
+name = "agentcad"
+version = "0.1.0"
+description = "CAD for AI agents: model parts in code, then prove them by measuring the built solids."
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Arya Vora" }]
+keywords = ["cad", "cadquery", "3d-printing", "ai-agents", "llm", "verification", "code-cad"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Developers",
+  "Intended Audience :: Manufacturing",
+  "Programming Language :: Python :: 3",
+  "Topic :: Multimedia :: Graphics :: 3D Modeling",
+  "Topic :: Scientific/Engineering",
+]
+dependencies = [
+  "cadquery>=2.8,<3",
+  "trimesh>=4",
+  "numpy",
+  "rtree",
+  "scipy",
+  "manifold3d",
+  "tomli>=2; python_version < '3.11'",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "ruff>=0.6"]
+
+[project.scripts]
+agentcad = "agentcad.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/AryaVora621/agentcad"
+Issues = "https://github.com/AryaVora621/agentcad/issues"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/agentcad"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = ["render: needs offscreen VTK rendering", "slow: takes more than a few seconds"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py310"
