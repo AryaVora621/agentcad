@@ -135,7 +135,7 @@ class Report:
     meta: dict                 # agentcad version, cadquery version, elapsed_s, printer, frame used
     def status(self) -> Status # FAIL if any FAIL/ERROR, else WARN if any WARN, else PASS
     def exit_code(self) -> int # 0 / 1, ERROR maps to 3
-    def to_json(self) -> str   # {"schema": "agentcad.report/1", ...}, floats rounded to 4 significant decimals
+    def to_json(self) -> str   # {"schema": "agentcad.report/1", ...}, floats rounded to 4 decimal places
     def to_table(self) -> str  # one line per check: STATUS  id  part  summary; last line "N pass, N warn, N fail"
 ```
 
@@ -200,10 +200,16 @@ Then it calls the project's `checks(ctx)` if defined. `CheckContext` gives proje
 ```python
 ctx.part(name) -> Part
 ctx.solid(name, frame="use") -> cq.Shape
-ctx.interference(a, b) -> float              # use frame
-ctx.distance(a, b) -> float                  # use frame
+# Every argument below that names a part also accepts a cq.Shape / cq.Workplane already in the use frame. That is
+# how probe solids work: build a stand-in for the mating thing (an M4 screw, a 54 mm ball, a cable) from the
+# requirement, not from the model's parameters, and measure against it.
+ctx.interference(a, b) -> float              # use frame, mm3
+ctx.distance(a, b) -> float                  # use frame, mm
 ctx.section(names, axis, at) -> dict
 ctx.slide(moving, against, direction, distance, steps=40) -> list[dict]
+ctx.play(moving, against, direction, max_mm=5.0, resolution_mm=0.01) -> float | None
+    # free travel of `moving` along `direction` before it overlaps `against` (bisection on interference > tol);
+    # None when it never touches within max_mm. Measures fit clearances (a lid's side play, a pin in a hole).
 ctx.expect(id, value, *, min=None, max=None, part=None, unit="mm", summary=None) -> Check
     # records PASS when min <= value <= max, else FAIL with measured/limit filled in
 ctx.record(check: Check) -> Check
