@@ -34,7 +34,7 @@ agent can act on.
 
 ## Quickstart
 
-agentcad is not on PyPI yet. Install from GitHub (Python 3.10 or newer, CadQuery 2.8):
+agentcad is not on PyPI yet. Install from GitHub (Python 3.11 or newer, because CadQuery 2.8 requires it):
 
 ```bash
 uv tool install git+https://github.com/AryaVora621/agentcad

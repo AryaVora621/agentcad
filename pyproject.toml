@@ -7,7 +7,7 @@ name = "agentcad"
 version = "0.1.0"
 description = "CAD for AI agents: model parts in code, then prove them by measuring the built solids."
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 license = "PolyForm-Noncommercial-1.0.0"
 license-files = ["LICENSE"]
 authors = [{ name = "Arya Vora" }]
@@ -27,7 +27,6 @@ dependencies = [
   "rtree",
   "scipy",
   "manifold3d",
-  "tomli>=2; python_version < '3.11'",
 ]
 
 [project.optional-dependencies]
@@ -50,4 +49,4 @@ markers = ["render: needs offscreen VTK rendering", "slow: takes more than a few
 
 [tool.ruff]
 line-length = 120
-target-version = "py310"
+target-version = "py311"

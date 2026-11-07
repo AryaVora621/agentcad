@@ -1,13 +1,9 @@
 """Generic printer envelopes and optional local profiles."""
 from __future__ import annotations
 
+import tomllib
 from dataclasses import dataclass
 from pathlib import Path
-
-try:
-    import tomllib
-except ModuleNotFoundError:  # Python 3.10 has no tomllib
-    import tomli as tomllib  # type: ignore[no-redef]
 
 
 @dataclass(frozen=True)

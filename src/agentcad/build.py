@@ -6,7 +6,7 @@ import json
 import os
 import shutil
 from dataclasses import asdict
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import cadquery as cq
@@ -54,7 +54,7 @@ def build(project: Project | str | Path = ".", out: str | Path | None = None) ->
             assembly.add(part.solid("use"), name=part.name)
         assembly.export(str(staging / "assembly.step"))
         manifest = {"schema": MANIFEST_SCHEMA, "project": project.name, "agentcad_version": __version__,
-                    "created": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                    "created": datetime.now(UTC).isoformat(timespec="seconds"),
                     "export": project.export, "printer": asdict(project.printer), "parts": records,
                     "files": {"assembly.step": sha256(staging / "assembly.step")},
                     "sources": source_hashes(project)}

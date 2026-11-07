@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import importlib.util
 import sys
+import tomllib
 import uuid
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -12,11 +13,6 @@ from types import ModuleType
 
 from .model import Part
 from .printers import Printer, get_printer
-
-try:
-    import tomllib
-except ModuleNotFoundError:  # Python 3.10 has no tomllib
-    import tomli as tomllib  # type: ignore[no-redef]
 
 
 class ConfigError(ValueError):

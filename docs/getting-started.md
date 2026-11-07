@@ -4,7 +4,7 @@ This tutorial takes you from install to a checked, rendered box with a lid. It t
 
 ## 1. Install
 
-agentcad is not on PyPI yet. It needs Python 3.10 or newer and installs CadQuery 2.8.
+agentcad is not on PyPI yet. It needs Python 3.11 or newer (CadQuery 2.8 requires it) and installs CadQuery 2.8.
 
 ```bash
 uv tool install git+https://github.com/AryaVora621/agentcad
