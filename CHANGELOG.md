@@ -7,6 +7,7 @@ All notable changes to this project are documented here. The format follows
 ## [0.1.0] - unreleased
 
 ### Added
+- Licensing: PolyForm Noncommercial 1.0.0 for noncommercial use, paid commercial licenses on request.
 - Project contract: `agentcad.toml` plus a Python model module with `parts()` and optional `checks(ctx)`.
 - Build pipeline with atomic output: STEP per part, print-frame and use-frame STL, assembly STEP, `manifest.json`.
 - Built-in gates measured from the built geometry: validity, single solid, watertight, bed fit, bed contact,

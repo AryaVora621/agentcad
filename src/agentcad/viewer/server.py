@@ -236,7 +236,27 @@ class ViewerHandler(http.server.BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(b"404 Not Found")
 
+    def _check_host(self) -> bool:
+        """Check Host header to prevent DNS rebinding attacks.
+        Allow only 127.0.0.1:<port>, localhost:<port>, or [::1]:<port>.
+        """
+        host = self.headers.get("Host", "").lower()
+        port = self.server.server_address[1]
+        allowed = {f"127.0.0.1:{port}", f"localhost:{port}", f"[::1]:{port}"}
+        if host not in allowed:
+            self.send_response(403)
+            self.send_header("Content-Type", "text/plain; charset=utf-8")
+            self.send_header("Content-Length", str(len(b"agentcad view: forbidden host")))
+            self.end_headers()
+            self.wfile.write(b"agentcad view: forbidden host")
+            return False
+        return True
+
     def do_GET(self) -> None:
+        # DNS rebinding protection: validate Host header before any routing
+        if not self._check_host():
+            return
+
         parsed = urllib.parse.urlsplit(self.path)
         path = parsed.path
 

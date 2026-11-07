@@ -208,25 +208,30 @@ def _require_offscreen() -> None:
         pytest.skip("Offscreen VTK not available")
 
 
-def _box_top_view(tmp_path: Path) -> np.ndarray:
+SIZES = [(800, 600), (1600, 1200)]
+
+
+def _box_top_view(tmp_path: Path, size: tuple[int, int] = (800, 600)) -> np.ndarray:
     box = trimesh.creation.box(extents=[60, 40, 30])
-    render_sheet([("box", box, "#4a7bd0")], str(tmp_path), views=("top",), size=(800, 600))
+    render_sheet([("box", box, "#4a7bd0")], str(tmp_path), views=("top",), size=size)
     return _read(tmp_path / "top.png")[:, :, :3].astype(int)
 
 
 @pytest.mark.render
-def test_scale_bar_matches_viewport(tmp_path: Path) -> None:
+@pytest.mark.parametrize("size", SIZES)
+def test_scale_bar_matches_viewport(tmp_path: Path, size: tuple[int, int]) -> None:
     """Bar px/mm must equal the model px/mm (60 mm box, top view) within 3%."""
     _require_offscreen()
-    top = _box_top_view(tmp_path)
+    w, h = size
+    top = _box_top_view(tmp_path, size)
 
     blue = top[:, :, 2] > top[:, :, 0] + 40
     cols = np.nonzero(blue.any(axis=0))[0]
     model_px_per_mm = (cols.max() - cols.min() + 1) / 60.0
 
     dark = top.sum(axis=2) < 150
-    dark[:, :400] = False
-    dark[:300, :] = False
+    dark[:, : w // 2] = False
+    dark[: h // 2, :] = False
     best = 0
     for row in np.unique(np.nonzero(dark)[0]):
         cs = np.nonzero(dark[row])[0]
@@ -235,23 +240,35 @@ def test_scale_bar_matches_viewport(tmp_path: Path) -> None:
     assert best > 0, "scale bar not found in the lower right"
 
     # The bar is a round length in mm; pick the one nearest to the measured run.
-    length = min((1, 2, 5, 10, 20, 50, 100), key=lambda mm: abs(best - mm * model_px_per_mm))
+    length = min((10, 20, 50), key=lambda mm: abs(best - mm * model_px_per_mm))
     assert abs(best / (length * model_px_per_mm) - 1.0) < 0.03
 
 
 @pytest.mark.render
-def test_model_clear_of_label_bands(tmp_path: Path) -> None:
-    """No model pixel in the top 140 px or bottom 90 px of any view."""
+@pytest.mark.parametrize("size", SIZES)
+def test_model_clear_of_label_bands(tmp_path: Path, size: tuple[int, int]) -> None:
+    """No model pixel in the top 140 s px, bottom 90 s px or outer 5% of the width."""
     _require_offscreen()
+    w, h = size
+    s = h / 600
     box = trimesh.creation.box(extents=[60, 40, 30])
-    render_sheet([("box", box, "#4a7bd0")], str(tmp_path), size=(800, 600))
+    render_sheet([("box", box, "#4a7bd0")], str(tmp_path), size=size)
     for view in ("iso", "front", "right", "top"):
         img = _read(tmp_path / f"{view}.png")[:, :, :3].astype(int)
         blue = img[:, :, 2] > img[:, :, 0] + 40
         rows, cols = np.nonzero(blue)
-        assert rows.min() >= 140, f"{view} model reaches row {rows.min()}"
-        assert rows.max() <= 600 - 90, f"{view} model reaches row {rows.max()}"
-        assert abs((cols.min() + cols.max()) / 2 - 400) < 10, f"{view} not centred"
+        assert rows.min() >= 140 * s, f"{view} model reaches row {rows.min()}"
+        assert rows.max() <= h - 90 * s, f"{view} model reaches row {rows.max()}"
+        assert cols.min() >= 0.05 * w and cols.max() <= 0.95 * w, f"{view} too close to the sides"
+        assert abs((cols.min() + cols.max()) / 2 - w / 2) < 0.0125 * w, f"{view} not centred"
+
+
+@pytest.mark.render
+def test_label_font_scales_with_view_size() -> None:
+    size = (60.0, 40.0, 30.0)
+    small = [f for _, f, _ in _label_lines("iso", "t", size, ("z", 1.0), 1.0)]
+    large = [f for _, f, _ in _label_lines("iso", "t", size, ("z", 1.0), 1200 / 600)]
+    assert large == [2 * f for f in small]
 
 
 @pytest.mark.render

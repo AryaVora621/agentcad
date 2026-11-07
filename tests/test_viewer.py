@@ -3,6 +3,7 @@
 import argparse
 import json
 import time
+import urllib.error
 import urllib.request
 from pathlib import Path
 
@@ -186,6 +187,138 @@ def test_viewer_bed_outline(tmp_path: Path) -> None:
         with urllib.request.urlopen(f"{base_url}/api/files") as resp:
             data = json.loads(resp.read().decode("utf-8"))
             assert data["bed"] == [300.0, 200.0]
+
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def _get_port_from_url(url: str) -> int:
+    return int(url.rsplit(":", 1)[1].rstrip("/"))
+
+
+def test_viewer_host_header_allowed_127(tmp_path: Path) -> None:
+    stl_path = tmp_path / "test.stl"
+    create_test_stl(stl_path)
+
+    server, url = start([str(stl_path)], open_browser=False)
+    base_url = url.rstrip("/")
+    port = _get_port_from_url(url)
+
+    try:
+        time.sleep(0.5)
+
+        req = urllib.request.Request(f"{base_url}/", headers={"Host": f"127.0.0.1:{port}"})
+        with urllib.request.urlopen(req) as resp:
+            assert resp.status == 200
+
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_viewer_host_header_allowed_localhost(tmp_path: Path) -> None:
+    stl_path = tmp_path / "test.stl"
+    create_test_stl(stl_path)
+
+    server, url = start([str(stl_path)], open_browser=False)
+    base_url = url.rstrip("/")
+    port = _get_port_from_url(url)
+
+    try:
+        time.sleep(0.5)
+
+        req = urllib.request.Request(f"{base_url}/", headers={"Host": f"localhost:{port}"})
+        with urllib.request.urlopen(req) as resp:
+            assert resp.status == 200
+
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_viewer_host_header_forbidden_evil(tmp_path: Path) -> None:
+    stl_path = tmp_path / "test.stl"
+    create_test_stl(stl_path)
+
+    server, url = start([str(stl_path)], open_browser=False)
+    base_url = url.rstrip("/")
+    port = _get_port_from_url(url)
+
+    try:
+        time.sleep(0.5)
+
+        # evil host with correct port
+        req = urllib.request.Request(f"{base_url}/", headers={"Host": f"evil.example:{port}"})
+        try:
+            urllib.request.urlopen(req)
+            assert False, "Expected 403"
+        except urllib.error.HTTPError as e:
+            assert e.code == 403
+            body = e.read().decode("utf-8")
+            assert body == "agentcad view: forbidden host"
+
+        # evil host without port
+        req = urllib.request.Request(f"{base_url}/", headers={"Host": "evil.example"})
+        try:
+            urllib.request.urlopen(req)
+            assert False, "Expected 403"
+        except urllib.error.HTTPError as e:
+            assert e.code == 403
+            body = e.read().decode("utf-8")
+            assert body == "agentcad view: forbidden host"
+
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_viewer_api_files_forbidden_wrong_host(tmp_path: Path) -> None:
+    stl_path = tmp_path / "test.stl"
+    create_test_stl(stl_path)
+
+    server, url = start([str(stl_path)], open_browser=False)
+    base_url = url.rstrip("/")
+    port = _get_port_from_url(url)
+
+    try:
+        time.sleep(0.5)
+
+        req = urllib.request.Request(f"{base_url}/api/files", headers={"Host": f"evil.example:{port}"})
+        try:
+            urllib.request.urlopen(req)
+            assert False, "Expected 403"
+        except urllib.error.HTTPError as e:
+            assert e.code == 403
+            body = e.read().decode("utf-8")
+            assert body == "agentcad view: forbidden host"
+
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_viewer_files_endpoint_forbidden_wrong_host_no_stl_bytes(tmp_path: Path) -> None:
+    stl_path = tmp_path / "test.stl"
+    create_test_stl(stl_path)
+    stl_bytes = stl_path.read_bytes()
+
+    server, url = start([str(stl_path)], open_browser=False)
+    base_url = url.rstrip("/")
+    port = _get_port_from_url(url)
+
+    try:
+        time.sleep(0.5)
+
+        req = urllib.request.Request(f"{base_url}/files/0", headers={"Host": f"evil.example:{port}"})
+        try:
+            urllib.request.urlopen(req)
+            assert False, "Expected 403"
+        except urllib.error.HTTPError as e:
+            assert e.code == 403
+            body = e.read().decode("utf-8")
+            assert body == "agentcad view: forbidden host"
+            assert stl_bytes not in body.encode("utf-8")
 
     finally:
         server.shutdown()

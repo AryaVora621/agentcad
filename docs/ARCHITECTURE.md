@@ -284,7 +284,9 @@ section 1.
   with the view name, overall size in mm and a scale bar. Offscreen VTK, feature-angle normals, parallel projection
   for orthographic views. `section=("z", 10.0)` cuts with `vtkClipClosedSurface` so cut faces are filled.
 - `viewer.serve(paths, port=None, open_browser=True, bed=None, colors=(), recursive=False)`: the local three.js
-  viewer, loopback only, live reload. `~/.local/bin/cadview`-style invocations map onto `agentcad view`.
+  viewer, loopback only, live reload. Requests whose Host header is not `127.0.0.1:<port>`, `localhost:<port>` or
+  `[::1]:<port>` get 403, which blocks DNS rebinding from other web pages. `python -m agentcad.viewer.server` keeps
+  the command line of the standalone viewer it was ported from.
 
 ## 12. Agent skill
 

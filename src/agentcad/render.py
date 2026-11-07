@@ -209,9 +209,16 @@ def _camera_for_view(
     return cam
 
 
+# Pixel constants below are for a 600 px high view and scale with h / 600.
+REF_HEIGHT_PX = 600
 TOP_BAND_PX = 140  # view name, title, size and section lines
 BOTTOM_BAND_PX = 90  # scale bar and its label
-SIDE_MARGIN_PX = 40
+SIDE_MARGIN_FRAC = 0.05  # of the view width, on each side
+
+
+def _scale(h: int) -> float:
+    """Pixel scale factor of a view of height h relative to the 600 px reference."""
+    return h / REF_HEIGHT_PX
 
 
 def _fit_to_band(ren: vtk.vtkRenderer, win: vtk.vtkRenderWindow) -> None:
@@ -235,8 +242,9 @@ def _fit_to_band(ren: vtk.vtkRenderer, win: vtk.vtkRenderWindow) -> None:
         return min(xs), max(xs), min(ys), max(ys)
 
     x0, x1, y0, y1 = project()
-    avail_w = w - 2 * SIDE_MARGIN_PX
-    avail_h = h - TOP_BAND_PX - BOTTOM_BAND_PX
+    top, bottom = TOP_BAND_PX * _scale(h), BOTTOM_BAND_PX * _scale(h)
+    avail_w = w * (1.0 - 2 * SIDE_MARGIN_FRAC)
+    avail_h = h - top - bottom
     zoom = 0.95 * min(avail_w / max(x1 - x0, 1e-6), avail_h / max(y1 - y0, 1e-6))
     cam.Zoom(zoom)
     win.Render()
@@ -244,7 +252,7 @@ def _fit_to_band(ren: vtk.vtkRenderer, win: vtk.vtkRenderWindow) -> None:
     # Zoom scales about the window centre, so measure again and pan the rest.
     x0, x1, y0, y1 = project()
     dx = w / 2.0 - (x0 + x1) / 2.0
-    dy = (BOTTOM_BAND_PX + (h - TOP_BAND_PX)) / 2.0 - (y0 + y1) / 2.0
+    dy = (bottom + (h - top)) / 2.0 - (y0 + y1) / 2.0
     cam.SetWindowCenter(-2.0 * dx / w, -2.0 * dy / h)
 
 
@@ -261,15 +269,16 @@ def _label_lines(
     title: str | None,
     overall_size: tuple[float, float, float],
     section: tuple[str, float] | None,
+    s: float = 1.0,
 ) -> list[tuple[str, int, bool]]:
-    """Text lines (text, font size, bold) stacked top-down under the view name."""
-    lines = [(view_name, 32, True)]
+    """Text lines (text, font size, bold) stacked top-down under the view name; s scales sizes."""
+    lines = [(view_name, round(32 * s), True)]
     if title:
-        lines.append((title, 22, False))
-    lines.append((f"{overall_size[0]:.1f} x {overall_size[1]:.1f} x {overall_size[2]:.1f} mm", 18, False))
+        lines.append((title, round(22 * s), False))
+    lines.append((f"{overall_size[0]:.1f} x {overall_size[1]:.1f} x {overall_size[2]:.1f} mm", round(18 * s), False))
     sec = _section_line(section)
     if sec:
-        lines.append((sec, 18, False))
+        lines.append((sec, round(18 * s), False))
     return lines
 
 
@@ -298,10 +307,11 @@ def _add_labels(
         ren.AddActor2D(t)
 
     # Top-left stack; every line must end above TOP_BAND_PX.
-    y = h - 60
-    for i, (text, size, bold) in enumerate(_label_lines(view_name, title, overall_size, section)):
-        add_text(text, 40, y, size, bold)
-        y -= 30 if i == 0 else 24
+    s = _scale(h)
+    y = h - 60 * s
+    for i, (text, size, bold) in enumerate(_label_lines(view_name, title, overall_size, section, s)):
+        add_text(text, round(40 * s), round(y), size, bold)
+        y -= (30 if i == 0 else 24) * s
 
     # Scale bar for orthographic views
     if cam.GetParallelProjection():
@@ -317,8 +327,9 @@ def _add_labels(
                 break
         # Bar in pixels
         px = length * h / (2.0 * ps)  # ps is half the HEIGHT in world units
-        x0 = w - 80 - px
-        y0 = 60
+        x0 = w - 80 * s - px
+        y0 = 60 * s
+        tick = 8 * s
 
         # Draw bar and ticks using 2D actors
         pts = vtk.vtkPoints()
@@ -326,11 +337,11 @@ def _add_labels(
         pts.InsertNextPoint(x0, y0, 0)
         pts.InsertNextPoint(x0 + px, y0, 0)
         # Left tick
-        pts.InsertNextPoint(x0, y0 - 8, 0)
-        pts.InsertNextPoint(x0, y0 + 8, 0)
+        pts.InsertNextPoint(x0, y0 - tick, 0)
+        pts.InsertNextPoint(x0, y0 + tick, 0)
         # Right tick
-        pts.InsertNextPoint(x0 + px, y0 - 8, 0)
-        pts.InsertNextPoint(x0 + px, y0 + 8, 0)
+        pts.InsertNextPoint(x0 + px, y0 - tick, 0)
+        pts.InsertNextPoint(x0 + px, y0 + tick, 0)
 
         lines = vtk.vtkCellArray()
         for a, b in ((0, 1), (2, 3), (4, 5)):
@@ -348,11 +359,11 @@ def _add_labels(
         actor2d = vtk.vtkActor2D()
         actor2d.SetMapper(mapper)
         actor2d.GetProperty().SetColor(0.07, 0.08, 0.1)
-        actor2d.GetProperty().SetLineWidth(2.5)
+        actor2d.GetProperty().SetLineWidth(max(1.0, 2.5 * s))
         ren.AddActor2D(actor2d)
 
         # Label
-        add_text(f"{length:.0f} mm", int(x0 + px / 2 - 30), y0 + 18, 18, False)
+        add_text(f"{length:.0f} mm", round(x0 + px / 2 - 30 * s), round(y0 + 18 * s), round(18 * s), False)
 
 
 def _render_view(

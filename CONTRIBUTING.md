@@ -26,3 +26,10 @@ uv pip install --python .venv/bin/python -e ".[dev]"
 
 Open an issue with the `agentcad doctor --json` output, the smallest `agentcad.toml` and `model.py` that reproduce
 the problem, and the report you expected versus the one you got.
+
+## License of contributions
+
+agentcad is offered under the PolyForm Noncommercial License 1.0.0 and, separately, under paid commercial licenses.
+By submitting a contribution you confirm that you wrote it or have the right to submit it, and you grant the author
+a perpetual, worldwide, royalty-free license to use, modify and relicense it as part of agentcad under both of those
+models. Say so in the pull request if you cannot agree to this before you open it.

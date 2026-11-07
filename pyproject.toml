@@ -8,7 +8,7 @@ version = "0.1.0"
 description = "CAD for AI agents: model parts in code, then prove them by measuring the built solids."
 readme = "README.md"
 requires-python = ">=3.10"
-license = "MIT"
+license = "PolyForm-Noncommercial-1.0.0"
 license-files = ["LICENSE"]
 authors = [{ name = "Arya Vora" }]
 keywords = ["cad", "cadquery", "3d-printing", "ai-agents", "llm", "verification", "code-cad"]
