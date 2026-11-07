@@ -255,4 +255,4 @@ Every new gate needs a fixture in `tests/` that makes it FAIL, next to one that 
 agentcad is source-available under the [PolyForm Noncommercial License 1.0.0](LICENSE). It is free for personal
 projects, hobby work, study, research, teaching, and use by charities, schools and public institutions. Commercial
 use, including use inside a company, in paid client work or in a commercial product or service, needs a paid license:
-see [COMMERCIAL.md](COMMERCIAL.md).
+see [COMMERCIAL.md](COMMERCIAL.md) or email [arya@arya-vora.org](mailto:arya@arya-vora.org).

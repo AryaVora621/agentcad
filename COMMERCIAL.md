@@ -9,7 +9,8 @@ engineering work, using it for paid client work, and redistributing it as part o
 
 ## How to get one
 
-Contact the author through GitHub ([@AryaVora621](https://github.com/AryaVora621)) with:
+Email [arya@arya-vora.org](mailto:arya@arya-vora.org) or reach the author on GitHub
+([@AryaVora621](https://github.com/AryaVora621)) with:
 
 - your company name and what you build,
 - how you plan to use agentcad (internal design work, in a product, in a hosted service),
