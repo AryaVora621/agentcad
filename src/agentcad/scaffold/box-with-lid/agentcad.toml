@@ -1,0 +1,14 @@
+[project]
+name = "box-with-lid"
+module = "model.py"
+
+[printer]
+profile = "generic-220"
+
+[export]
+tolerance = 0.02
+angular_tolerance = 0.05
+
+[checks]
+max_overhang_deg = 45
+overhang_allow_mm2 = 25

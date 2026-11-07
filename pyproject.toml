@@ -31,7 +31,8 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8", "ruff>=0.6"]
+# ruff is pinned to a minor version because its default rule set changes between releases
+dev = ["pytest>=8", "ruff>=0.17,<0.18"]
 
 [project.scripts]
 agentcad = "agentcad.cli:main"

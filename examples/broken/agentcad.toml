@@ -1,0 +1,11 @@
+[project]
+name = "broken"
+module = "model.py"
+
+[printer]
+profile = "generic-220"
+
+[checks]
+max_overhang_deg = 45
+overhang_allow_mm2 = 25
+min_wall_mm = 1.2

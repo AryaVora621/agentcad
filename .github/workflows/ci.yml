@@ -1,0 +1,40 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        python: ["3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - name: Install system GL libraries for offscreen VTK
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libgl1 libegl1 libosmesa6 libxrender1 xvfb
+      - name: Install
+        run: |
+          uv venv --python ${{ matrix.python }} .venv
+          uv pip install --python .venv/bin/python -e ".[dev]"
+      - name: Lint
+        run: .venv/bin/ruff check src tests examples
+      - name: Test (Linux, virtual display for VTK)
+        if: runner.os == 'Linux'
+        run: xvfb-run -a .venv/bin/python -m pytest -q
+      - name: Test (macOS)
+        if: runner.os == 'macOS'
+        run: .venv/bin/python -m pytest -q
+      - name: Examples pass, negative fixture fails
+        shell: bash
+        run: |
+          .venv/bin/agentcad check examples/bracket
+          .venv/bin/agentcad check examples/box_with_lid
+          set +e; .venv/bin/agentcad check examples/broken --json > broken.json; code=$?; set -e
+          test "$code" = "1"

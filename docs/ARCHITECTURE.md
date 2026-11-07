@@ -101,6 +101,7 @@ angular_tolerance = 0.05       # rad
 [checks]
 max_overhang_deg = 45          # tilt of a downward face from vertical (0 wall, 90 flat ceiling)
 overhang_allow_mm2 = 25        # unsupported area allowed per part before FAIL
+first_layer_mm = 0.3           # downward faces centred below this print with the first layers (0 disables)
 min_wall_mm = 0                # 0 disables the wall gate; otherwise FAIL below this
 interference_tol_mm3 = 0.01    # overlap below this counts as touching
 allow_overlap = [["lid", "box"]]   # pairs that may overlap in the use pose (press fits, snap barbs)
@@ -151,7 +152,7 @@ solids_count(shape) -> int; is_valid(shape) -> bool
 to_mesh(shape, tolerance, angular_tolerance) -> trimesh.Trimesh   # via a temp STL export
 load(path) -> cq.Shape | trimesh.Trimesh        # .step/.stp -> Shape; .stl/.obj/.ply/.3mf/.glb -> Trimesh
 
-interference(a, b) -> float                     # mm3 of a.intersect(b); BRep for Shapes, manifold3d for meshes
+interference(a, b) -> float                     # mm3 of overlap; see "Robust overlap" below
 distance(a, b) -> float                         # min distance mm (BRepExtrema_DistShapeShape); 0 if touching or
                                                 # overlapping
 section(shapes, axis="z", at=0.0) -> dict       # {"area_mm2", "bbox_mm", "loops"} of the planar cut
@@ -161,11 +162,23 @@ slide(moving, against, direction, distance, steps) -> list[dict]
     # a drawer slides out, or a latch only overlaps at its barb.
 ```
 
+Robust overlap. OCCT's boolean common is order dependent when faces are coplanar: for a lid resting on a box rim
+with an oversized lip, `box.intersect(lid)` returned a shell with no solid (and a bogus volume) while
+`lid.intersect(box)` returned the true 558 mm3. Counting only solids turned a real overlap into a silent PASS.
+`measure.overlap` therefore computes the BRep common in both orders and accepts it only when both results are clean
+(no shell or face residue outside solids) and agree within max(1e-6, 1e-4 x larger). Otherwise it intersects the
+tessellated meshes with manifold3d and returns the largest of the three volumes, so disagreement always errs toward
+FAIL. `section` sums cut areas per shape (fusing touching solids fails in OCCT), so overlapping solids count twice.
+`bbox` uses exact analytic bounds, because tessellation-grown boxes put print-frame minimum z slightly below 0.
+
 ## 7. Printability (`printability.py`, `wall.py`, `printers.py`)
 
 - `overhang(mesh, max_deg=45, bed_tol=0.05) -> dict`: in the print frame, a face is unsupported when it faces down
   and its tilt from vertical exceeds `max_deg` (normal z < -sin(max_deg)), unless every vertex sits within `bed_tol`
-  of z = 0. Unsupported faces are grouped into connected regions (shared edges); the result holds the total area,
+  of z = 0. A face exactly at the limit passes (FAIL only above `max_deg` + 0.01 degrees). Downward faces whose
+  centroid z is below `first_layer_mm` (default 0.3) print with the first layers, for example an anti elephant-foot
+  chamfer on a bottom edge, and are not counted; their area is reported as `first_layer_area_mm2` so nothing is
+  hidden. Unsupported faces are grouped into connected regions (shared edges); the result holds the total area,
   the region count and the five largest regions with area, z range and centroid.
 - `bed_fit(mesh_or_bbox, bed_xyz, margin=2.0) -> dict`: fits if the print-frame bbox fits inside the bed with `margin`
   on each side in XY (rotating 90 degrees about Z is tried and reported).
@@ -215,7 +228,9 @@ ctx.expect(id, value, *, min=None, max=None, part=None, unit="mm", summary=None)
 ctx.record(check: Check) -> Check
 ```
 
-A project check that raises is recorded as ERROR with the traceback's last line, and the run continues.
+A project check that raises is recorded as ERROR with the traceback's last line, and the run continues. Besides
+`checks(ctx)`, every module-level function named `check_*(ctx)` runs on its own, so one raising check does not stop
+the others.
 
 ## 9. Build outputs (`build.py`)
 
@@ -231,8 +246,11 @@ assembly/<part>.stl   use frame
 assembly.step         every part in the use frame, one named solid per part
 ```
 
-The build is atomic: it writes into `build/.tmp-<pid>` and renames on success, so a crashed build never leaves stale
-files that look fresh. `report.json` is written next to `manifest.json` by `agentcad check`.
+The build is atomic: it writes into `build/.tmp-<pid>` and swaps each output entry in only on success, so a crashed
+build never leaves stale files that look fresh, while `build/renders/` and `report.json` survive a rebuild. The
+manifest also records `files` and `sources` (sha256), which `check --no-build` uses to refuse a stale build.
+`report.json` is written next to `manifest.json` by `agentcad check`; reports also carry `status`, `exit_code` and
+`counts`.
 
 ## 10. CLI (`cli.py`)
 
@@ -242,7 +260,7 @@ agentcad build [PROJECT] [--out DIR] [--json]
 agentcad check [PROJECT] [--json] [--only ID,ID] [--no-build]
 agentcad measure FILE... [--json]                 bbox, volume, area, CoM, solids/watertight for STEP or meshes
 agentcad interfere FILE... [--json] [--tol MM3]   pairwise overlap between files as placed
-agentcad overhang FILE... [--max-deg 45] [--allow MM2] [--json]
+agentcad overhang FILE... [--max-deg 45] [--allow MM2] [--first-layer MM] [--json]
 agentcad wall FILE... [--thin MM] [--samples N] [--bands MM] [--up] [--zmin Z] [--zmax Z] [--rmin R] [--rmax R]
               [--json]                            all options of the original stlwall tool; --bands adds a per-z-band
                                                   min / p2 / median table, --up samples only upward faces (nz > 0.3),
@@ -250,7 +268,8 @@ agentcad wall FILE... [--thin MM] [--samples N] [--bands MM] [--up] [--zmin Z] [
 agentcad fit FILE... (--printer NAME | --bed XxYxZ) [--json]
 agentcad render [PROJECT | FILE...] [-o DIR] [--frame use|print] [--views iso,front,right,top] [--section AXIS=MM]
 agentcad view [PROJECT | PATH...] [--port N] [--no-open] [--bed WxD] [--color PATTERN=#RRGGBB[@OPACITY]] [-r]
-agentcad diff OLD NEW [--json]                    compare two manifest.json files (volume, bbox, part set)
+agentcad diff OLD NEW [--json]                    compare two manifest.json files or build folders (volume, bbox,
+                                                  part set); schema agentcad.diff/1, exit 0 whenever it can compare
 agentcad printers [--json]
 agentcad doctor [--json]                          versions, VTK offscreen check, write access
 ```
