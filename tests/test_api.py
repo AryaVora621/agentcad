@@ -1,6 +1,7 @@
 """Tests for agentcad.api: describe(), cheat_sheet(), and cli()."""
 import argparse
 import json
+import re
 import subprocess
 
 from agentcad import api, checks, cli, printers, project, report
@@ -131,7 +132,8 @@ def test_cheat_sheet_under_10kb_and_contains_all():
     assert len(sheet.encode("utf-8")) < 10240, "cheat sheet exceeds 10 KB"
     # Names every subcommand
     for cmd in doc["commands"]:
-        assert f"`agentcad {cmd['name']}" in sheet  # usage line starts with the command name
+        # One usage line per command: "- `agentcad NAME`: help" or "- `agentcad NAME ARGS...`: help".
+        assert re.search(rf"^- `agentcad {re.escape(cmd['name'])}(`| [^`]*`): \S", sheet, re.MULTILINE), cmd["name"]
     # Names every context method
     for m in doc["context"]:
         assert m["name"] in sheet
