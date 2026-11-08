@@ -231,3 +231,39 @@ def test_brief_view_keeps_project_passes_as_compact_entries(cli, copy_example):
     assert data["passed_checks"] and all(set(e) == {"id", "part", "summary"} for e in data["passed_checks"])
     assert any(e["id"] == "lid_play_x" for e in data["passed_checks"])
     assert "lid_play_x" not in data["passed"] and "valid" in data["passed"]
+
+
+@pytest.mark.parametrize(("env", "expected"), [(None, 1800.0), ("90", 90.0), ("junk", 1800.0), ("0", 1e9), ("-5", 1e9)])
+def test_backstop_timeout_default_and_overrides(monkeypatch, env, expected):
+    from agentcad.cli import _hard_timeout_s
+
+    if env is None:
+        monkeypatch.delenv("AGENTCAD_CHECK_TIMEOUT_S", raising=False)
+    else:
+        monkeypatch.setenv("AGENTCAD_CHECK_TIMEOUT_S", env)
+    assert _hard_timeout_s() == expected
+
+
+def test_backstop_kills_a_hung_check_with_exit_one_no_json_and_a_stack(make_project):
+    # docs/cli.md promises this contract to agents: exit 1, nothing on stdout, the hung line in the stderr stack.
+    import os
+    import subprocess
+    import sys
+
+    folder = make_project("""
+        import time
+        import cadquery as cq
+        from agentcad import Part
+
+        def parts():
+            return [Part("block", cq.Workplane("XY").box(10, 10, 10, centered=(True, True, False)))]
+
+        def check_hangs(ctx):
+            time.sleep(60)
+        """)
+    env = {**os.environ, "AGENTCAD_CHECK_TIMEOUT_S": "2"}
+    proc = subprocess.run([sys.executable, "-m", "agentcad.cli", "check", str(folder), "--json"],
+                          capture_output=True, text=True, env=env, timeout=50, check=False)
+    assert proc.returncode == 1
+    assert proc.stdout == ""
+    assert "Timeout" in proc.stderr and "check_hangs" in proc.stderr
