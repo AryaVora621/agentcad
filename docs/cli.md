@@ -33,6 +33,8 @@ created demo from template 'bracket': README.md, agentcad.toml, model.py
 next: cd demo && agentcad check
 ```
 
+`project.name` in `agentcad.toml` is set to the folder name (`demo`), so reports and renders carry it.
+
 ## agentcad build
 
 ```
@@ -88,6 +90,18 @@ Builds the project, runs the built-in gates, then the project's own checks, and 
 Project checks are `checks(ctx)` and any module-level function named `check_*`; each runs in isolation, and one that
 raises becomes an ERROR check while the rest still run.
 
+The report meta (and the text totals line) shows two times: `build_s`, the time spent building the model (`check`
+always rebuilds unless `--no-build`), and `elapsed_s`, the time spent in the checks. A small `elapsed_s` does not mean
+the rebuild was skipped.
+
+Time limits, so a check never runs unbounded without a message: each project check function gets a soft budget of 300 s
+(`AGENTCAD_CHECK_BUDGET_S`, 0 turns it off), polled between booleans; going over turns that function into an ERROR
+check naming it, and the rest still run. `play` and `slide` are bounded searches (under 170 overlap measurements for a
+`play`). OCC booleans hold the interpreter and cannot be interrupted, so a hard backstop (`AGENTCAD_CHECK_TIMEOUT_S`,
+default 1800 s) stops the process and prints the Python stack of the check that was running to stderr. That exit
+is code 1 with no JSON on stdout (the timer cannot choose its code): treat a missing report as no result, not as a
+failed gate.
+
 ```
 $ agentcad check lid
 PASS   valid           box      valid solid, 15552.0 mm3
@@ -115,8 +129,9 @@ FAIL   interference  left+right         overlap 4000.0 mm3 > 0.01
 
 Made for an agent that re-reads the report after every edit. With `--json` the document keeps the schema id
 `agentcad.report/1`, adds `"view": "brief"`, uses compact separators, lists only checks that are not PASS, and groups
-the passing checks by id in `passed`. Measured on `examples/broken`: 17,895 bytes in the full view, 3,144 bytes in the
-brief view; on `examples/bracket` the brief view is 588 bytes. Field details are in
+the passing built-in gates by id in `passed`; passing project checks (your `ctx.expect` ids) stay as compact
+`{"id", "part", "summary"}` entries in `passed_checks`. Measured on `examples/broken`: 17,996 bytes in the full view,
+3,282 bytes in the brief view; on `examples/bracket` the brief view is 837 bytes. Field details are in
 [report-schema.md](report-schema.md#brief-view). Use the full report when you need every `measured` and `limit`
 value, or the numbers of a passing check.
 
@@ -426,10 +441,10 @@ PASS   printers      -     5 built-in, 0 user profile(s)
 | `ctx.part(name)`, `ctx.solid(name, frame="use")` | the `Part`, or its built solid |
 | `ctx.interference(a, b)` | overlap in mm3 |
 | `ctx.distance(a, b)` | minimum distance in mm, 0 if touching |
-| `ctx.section(names, axis, at)` | `{"area_mm2", "bbox_mm", "loops"}`; areas are summed per shape |
+| `ctx.section(names, axis, at)` | `{"area_mm2", "bbox_mm", "loops", "loop_list"}`; areas are summed per shape; `loop_list` is `[{"area_mm2", "bbox_mm", "perimeter_mm", "hole"}, ...]`, one per outline (`area_mm2` is the area the outline encloses, also for a hole), so a window or slot can be measured from its outline |
 | `ctx.slide(moving, against, direction, distance, steps=40)` | `[{"offset_mm", "overlap_mm3"}, ...]`; `direction` is an `(x, y, z)` tuple, normalised |
-| `ctx.play(moving, against, direction, max_mm=5.0, resolution_mm=0.01)` | free travel in mm, `None` if it never touches |
-| `ctx.expect(id, value, *, min=None, max=None, part=None, unit="mm", summary=None)` | records PASS or FAIL; needs `min` or `max` |
+| `ctx.play(moving, against, direction, max_mm=5.0, resolution_mm=0.01)` | free travel in mm, `None` if it never touches; a probe that already overlaps at the start returns `0.0` and `ctx.expect` says "probe starts in contact" (and sets `measured.starts_in_contact`) |
+| `ctx.expect(id, value, *, min=None, max=None, part=None, unit="mm", summary=None, hint=None, where=None)` | records PASS or FAIL; needs `min` or `max`; a custom `summary` becomes `"<summary>: <value> <unit>"` unless it already shows the value |
 | `ctx.record(check)` | adds a hand-built `Check` |
 
 `unit` names the keys: `unit="mm3"` stores `value_mm3`, `min_mm3` and `max_mm3`.

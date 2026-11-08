@@ -1,12 +1,15 @@
 """The built-in gates behind ``agentcad check`` and the context handed to project checks."""
 from __future__ import annotations
 
+import os
 import time
 import traceback
 from collections.abc import Callable, Iterable, Sequence
 from itertools import combinations
 
 import cadquery as cq
+import numpy as np
+import trimesh
 
 from . import __version__, measure, printability
 from .flat import FLAT_IDS, flat_gates
@@ -21,6 +24,8 @@ BUILTIN_IDS = PRINT_IDS + FLAT_IDS
 WALL_SAMPLES = 40000
 # bed_contact warns below this share of the footprint or this absolute area (mm2).
 MIN_CONTACT_SHARE, MIN_CONTACT_MM2 = 0.01, 20.0
+# One project check function normally needs seconds; this stops a search loop of slow booleans on a shared machine.
+DEFAULT_CHECK_BUDGET_S = 300.0
 
 PartRef = str | cq.Shape | cq.Workplane
 
@@ -82,16 +87,21 @@ class CheckContext:
 
     def play(self, moving: PartRef, against: PartRef | Sequence[PartRef], direction: Sequence[float],
              max_mm: float = 5.0, resolution_mm: float = 0.01) -> float | None:
-        """Free travel in mm before ``moving`` overlaps ``against``; None if it never touches within ``max_mm``."""
+        """Free travel in mm before ``moving`` overlaps ``against``; None if it never touches within ``max_mm``.
+
+        A probe that already overlaps at its start returns 0.0 with ``starts_in_contact`` set, and ``expect``
+        says so in its summary.
+        """
         return measure.play(self._shape(moving), self._shapes(against), direction, max_mm, resolution_mm,
                             self.project.checks["interference_tol_mm3"])
 
     def expect(self, id: str, value: float, *, min: float | None = None, max: float | None = None,
                part: str | None = None, unit: str = "mm", summary: str | None = None,
-               hint: str | None = None) -> Check:
+               hint: str | None = None, where: list[dict] | None = None) -> Check:
         """Record PASS when ``min <= value <= max`` and FAIL otherwise. At least one bound is required.
 
-        ``hint`` says how to fix a failure; it is only attached when the check fails.
+        ``hint`` says how to fix a failure; it is only attached when the check fails. ``where`` lists the
+        locations to look at (use frame unless an entry says otherwise).
         """
         if min is None and max is None:
             raise ValueError(f"expect({id!r}): give min, max or both")
@@ -101,18 +111,39 @@ class CheckContext:
         ok = (min is None or value >= min) and (max is None or value <= max)
         limit = {f"{key}_{unit}": bound for key, bound in (("min", min), ("max", max)) if bound is not None}
         text = " and ".join(f"{key} {bound:g}" for key, bound in (("min", min), ("max", max)) if bound is not None)
-        return self.record(Check(id, part, Status.PASS if ok else Status.FAIL,
-                                 summary or f"{value:.4g} {unit} ({'within' if ok else 'outside'} {text})",
-                                 {f"value_{unit}": value}, limit, hint=None if ok else hint))
+        shown = f"{value:.4g} {unit}"
+        if summary is None:
+            summary = f"{shown} ({'within' if ok else 'outside'} {text})"
+        elif f"{value:.4g}" not in summary:
+            # A custom label alone hides the number an agent must quote.
+            summary = f"{summary}: {shown}"
+        measured = {f"value_{unit}": value}
+        if getattr(value, "starts_in_contact", False):
+            # play() returned 0 because the probe overlaps at the start, not because it measured a gap of 0.
+            summary += "; probe starts in contact (already overlapping at its start position)"
+            measured["starts_in_contact"] = True
+        return self.record(Check(id, part, Status.PASS if ok else Status.FAIL, summary, measured, limit,
+                                 list(where or []), hint=None if ok else hint))
 
     def record(self, check: Check) -> Check:
-        """Add a hand-built Check to the report."""
+        """Add a hand-built Check to the report.
+
+        Project checks measure in the use frame, so a ``where`` entry without a frame is tagged ``"use"``.
+        """
+        for entry in check.where:
+            if isinstance(entry, dict):
+                entry.setdefault("frame", "use")
         self.checks.append(check)
         return check
 
 
-def run_checks(project: Project, result: BuildResult, only: Iterable[str] | None = None) -> Report:
-    """Run the built-in gates, then the project's own checks, and return one Report."""
+def run_checks(project: Project, result: BuildResult, only: Iterable[str] | None = None,
+               build_s: float | None = None) -> Report:
+    """Run the built-in gates, then the project's own checks, and return one Report.
+
+    ``build_s`` is the time the caller spent building; ``elapsed_s`` only covers the gates, so without both a reader
+    cannot tell a rebuild from a skipped one.
+    """
     started = time.perf_counter()
     wanted = set(only) if only is not None else None
     ctx = CheckContext(project, result)
@@ -122,6 +153,8 @@ def run_checks(project: Project, result: BuildResult, only: Iterable[str] | None
     meta = {"agentcad": __version__, "cadquery": cq.__version__, "printer": project.printer.name,
             "bed_mm": list(project.printer.bed_xyz), "frames": {"printability": "print", "fit": "use"},
             "build": str(result.path), "elapsed_s": round(time.perf_counter() - started, 2)}
+    if build_s is not None:
+        meta["build_s"] = round(build_s, 2)
     return Report("check", project.name, checks, meta)
 
 
@@ -170,6 +203,15 @@ def _builtin(ctx: CheckContext, wanted: set[str] | None) -> list[Check]:
     return out
 
 
+def check_budget_s() -> float | None:
+    """Soft time budget per project check function, seconds; ``AGENTCAD_CHECK_BUDGET_S`` overrides, 0 disables."""
+    try:
+        value = float(os.environ.get("AGENTCAD_CHECK_BUDGET_S", DEFAULT_CHECK_BUDGET_S))
+    except ValueError:
+        value = DEFAULT_CHECK_BUDGET_S
+    return value if value > 0 else None
+
+
 def _project_checks(ctx: CheckContext) -> list[Check]:
     module = ctx.project.module
     functions: list[tuple[str, Callable]] = []
@@ -178,10 +220,12 @@ def _project_checks(ctx: CheckContext) -> list[Check]:
     # Extra isolated entry points: one failing check_* function does not stop the others.
     functions += [(name, fn) for name, fn in vars(module).items()
                   if name.startswith("check_") and callable(fn) and getattr(fn, "__module__", None) == module.__name__]
+    budget = check_budget_s()
     with ctx.project.on_path():
         for name, function in functions:
             try:
-                function(ctx)
+                with measure.time_limit(budget, f"project check {name}()"):
+                    function(ctx)
             except Exception as exc:  # noqa: BLE001  project code may raise anything
                 last = traceback.format_exception_only(type(exc), exc)[-1].strip()
                 ctx.record(Check(name, None, Status.ERROR, f"raised {last}"))
@@ -215,9 +259,51 @@ def _watertight(name: str, mesh) -> Check:
     if tight and consistent:
         return Check("watertight", name, Status.PASS, f"watertight, {len(mesh.faces)} triangles", measured)
     reason = "has open edges" if not tight else "has inconsistent winding"
+    where = open_edge_clusters(mesh)
+    measured["open_edges"] = where.total
     return Check("watertight", name, Status.FAIL, f"print STL {reason}; slicers may repair or reject it", measured,
+                 where=list(where),
                  hint=("remove zero-thickness faces, sliver cuts and coincident faces from the model "
-                       "(offset a cut by 0.01 mm past the surface) so the print STL closes"))
+                       "(offset a cut by 0.01 mm past the surface) so the print STL closes; the open edges are in "
+                       "where (print frame). Revolve axes, sphere poles and tangent seams also open the mesh: rotate "
+                       "the revolve axis off the seam, split the sphere into two hemispheres, or union a small overlap"))
+
+
+class _Clusters(list):
+    """The cluster list plus the total open-edge count, so callers can report both."""
+
+    total = 0
+
+
+def open_edge_clusters(mesh, limit: int = 10) -> _Clusters:
+    """Group the mesh's open or non-manifold edges into connected clusters, largest first.
+
+    A closed surface uses every edge exactly twice, so edges used any other number of times are where the
+    mesh leaks. Each cluster is reported with its centre and extent in the print frame.
+    """
+    edges = mesh.edges_sorted
+    if not len(edges):
+        return _Clusters()
+    unique, counts = np.unique(edges, axis=0, return_counts=True)
+    bad = unique[counts != 2]
+    out = _Clusters()
+    out.total = len(bad)
+    if not len(bad):
+        return out
+    components = trimesh.graph.connected_components(bad, nodes=np.unique(bad))
+    label = {int(node): index for index, nodes in enumerate(components) for node in nodes}
+    sizes = np.bincount([label[int(a)] for a, _ in bad], minlength=len(components))
+    vertices = np.asarray(mesh.vertices)
+    ranked = []
+    for index, nodes in enumerate(components):
+        points = vertices[np.asarray(nodes, dtype=int)]
+        low, high = points.min(axis=0), points.max(axis=0)
+        ranked.append((int(sizes[index]), {"centroid_mm": ((low + high) / 2).tolist(),
+                                           "extent_mm": (high - low).tolist(), "edges": int(sizes[index]),
+                                           "frame": "print"}))
+    ranked.sort(key=lambda item: item[0], reverse=True)
+    out.extend(entry for _, entry in ranked[:limit])
+    return out
 
 
 def _bed_fit(name: str, mesh, printer) -> Check:
@@ -277,7 +363,7 @@ def _bed_contact(name: str, mesh) -> Check:
 def _overhang(name: str, mesh, cfg: dict) -> Check:
     result = printability.overhang(mesh, cfg["max_overhang_deg"], first_layer_mm=cfg["first_layer_mm"])
     allow = cfg["overhang_allow_mm2"]
-    where = [{"centroid_mm": r["centroid_mm"], "area_mm2": r["area_mm2"], "z_mm": r["z_mm"]}
+    where = [{"centroid_mm": r["centroid_mm"], "area_mm2": r["area_mm2"], "z_mm": r["z_mm"], "frame": "print"}
              for r in result["regions"]]
     measured = {"area_mm2": result["area_mm2"], "regions": result["region_count"],
                 "first_layer_area_mm2": result["first_layer_area_mm2"]}
@@ -303,7 +389,8 @@ def _min_wall(name: str, mesh, cfg: dict) -> Check:
     if not result["hits"]:
         return Check("min_wall", name, Status.WARN, "no ray hits; mesh is open or empty, wall not measured")
     measured = {k: result[k] for k in ("min_mm", "p1_mm", "p5_mm", "median_mm", "thin_share")}
-    where = [{"centroid_mm": result["min_at_mm"], "z_mm": result["thin_z_mm"]}] if result["thin_z_mm"] else []
+    where = ([{"centroid_mm": result["min_at_mm"], "z_mm": result["thin_z_mm"], "frame": "print"}]
+             if result["thin_z_mm"] else [])
     if result["p1_mm"] >= limit_mm:
         return Check("min_wall", name, Status.PASS, f"p1 {result['p1_mm']:.2f} mm, min {result['min_mm']:.2f} mm",
                      measured, {"min_wall_mm": limit_mm})
@@ -326,7 +413,7 @@ def _interference(a: str, b: str, shape_a: cq.Shape, shape_b: cq.Shape, tol: flo
     if allowed:
         return Check("interference", pair, Status.PASS, f"overlap {overlap:.1f} mm3 (listed in allow_overlap)",
                      measured, limit)
-    where = [{"centroid_mm": detail["centroid_mm"], "volume_mm3": overlap, "bbox_mm": detail["bbox"]}]
+    where = [{"centroid_mm": detail["centroid_mm"], "volume_mm3": overlap, "bbox_mm": detail["bbox"], "frame": "use"}]
     return Check("interference", pair, Status.FAIL, f"overlap {overlap:.1f} mm3 > {tol:g}", measured, limit, where,
                  hint=(f"move one part with Part.use or add clearance near where[0] ({', '.join(f'{v:.1f}' for v in detail['centroid_mm'])}); "
                        "if this is a designed press fit, list the pair in checks.allow_overlap"))

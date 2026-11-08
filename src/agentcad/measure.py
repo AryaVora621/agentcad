@@ -1,7 +1,10 @@
 """Pairwise measurements between solids: overlap, clearance, cross-sections and motion."""
 from __future__ import annotations
 
-from collections.abc import Sequence
+import time
+from collections.abc import Iterator, Sequence
+from contextlib import contextmanager
+from typing import Self
 
 import cadquery as cq
 import numpy as np
@@ -11,6 +14,45 @@ from OCP.BRepExtrema import BRepExtrema_DistShapeShape
 from .geometry import Geometry, bbox, to_mesh, to_shape
 
 Vector3 = Sequence[float]
+
+
+class CheckTimeout(RuntimeError):
+    """A measurement ran past the time budget set by ``time_limit``; reported as an ERROR check, never a hang."""
+
+
+# End of the active time budget (time.monotonic), or None. OCC booleans hold the GIL and cannot be interrupted,
+# so the budget is polled between booleans: a search loop of slow booleans stops, a single endless one is left to
+# the process-level backstop in the CLI.
+_deadline: tuple[float, float, str] | None = None
+
+
+@contextmanager
+def time_limit(seconds: float | None, label: str = "measurement") -> Iterator[None]:
+    """Make measurements started inside the block raise ``CheckTimeout`` once ``seconds`` have passed."""
+    global _deadline
+    previous = _deadline
+    _deadline = None if not seconds else (time.monotonic() + seconds, seconds, label)
+    try:
+        yield
+    finally:
+        _deadline = previous
+
+
+def _tick() -> None:
+    if _deadline is not None and time.monotonic() > _deadline[0]:
+        raise CheckTimeout(f"{_deadline[2]} exceeded its {_deadline[1]:g} s time budget; use a larger step, a "
+                           "shorter max_mm or fewer probes, or raise AGENTCAD_CHECK_BUDGET_S")
+
+
+class Play(float):
+    """Free travel in mm. ``starts_in_contact`` is True when the probe already overlapped at offset 0."""
+
+    starts_in_contact = False
+
+    def __new__(cls, value: float, starts_in_contact: bool = False) -> Self:
+        play = super().__new__(cls, value)
+        play.starts_in_contact = starts_in_contact
+        return play
 
 
 def _disjoint(a: Geometry, b: Geometry) -> bool:
@@ -43,6 +85,7 @@ def overlap(a: Geometry, b: Geometry) -> dict:
     disagree, the tessellated meshes are intersected too and the largest volume wins, so a doubtful
     result errs toward reporting an overlap.
     """
+    _tick()
     empty = {"volume_mm3": 0.0, "centroid_mm": None, "bbox": None}
     if _disjoint(a, b):
         return empty
@@ -103,15 +146,28 @@ def section(shapes: Sequence[cq.Shape] | cq.Shape, axis: str = "z", at: float = 
     normal = tuple(1.0 if name == axis else 0.0 for name in "xyz")
     plane = cq.Plane(origin=tuple(at * n for n in normal), normal=normal)
     faces, loops = [], 0
+    loop_list: list[dict] = []
     for shape in items:
         wires = cq.Workplane(plane).newObject([shape]).section().wires().vals()
         if wires:
-            faces += cq.occ_impl.shapes.wiresToFaces(wires)
+            shape_faces = cq.occ_impl.shapes.wiresToFaces(wires)
+            faces += shape_faces
             loops += len(wires)
+            # Outlines let an agent read a window or slot size off the cut instead of guessing from the total area.
+            for face in shape_faces:
+                loop_list.append(_loop(face.outerWire(), hole=False))
+                loop_list += [_loop(wire, hole=True) for wire in face.innerWires()]
     if not faces:
-        return {"area_mm2": 0.0, "bbox_mm": None, "loops": 0}
+        return {"area_mm2": 0.0, "bbox_mm": None, "loops": 0, "loop_list": []}
     cut = cq.Compound.makeCompound(faces)
-    return {"area_mm2": float(sum(f.Area() for f in faces)), "bbox_mm": bbox(cut), "loops": loops}
+    return {"area_mm2": float(sum(f.Area() for f in faces)), "bbox_mm": bbox(cut), "loops": loops,
+            "loop_list": loop_list}
+
+
+def _loop(wire: cq.Wire, hole: bool) -> dict:
+    """One cut outline: the area it encloses (positive for holes too), its bounding box and perimeter."""
+    return {"area_mm2": float(cq.Face.makeFromWires(wire).Area()), "bbox_mm": bbox(wire),
+            "perimeter_mm": float(wire.Length()), "hole": hole}
 
 
 def unit_direction(direction: Vector3) -> np.ndarray:
@@ -145,7 +201,9 @@ def play(moving: cq.Shape, against: Sequence[cq.Shape] | cq.Shape, direction: Ve
          resolution_mm: float = 0.01, tol_mm3: float = 0.01) -> float | None:
     """Free travel of ``moving`` along ``direction`` before overlap exceeds ``tol_mm3``.
 
-    Returns 0.0 when it already overlaps and None when it never touches within ``max_mm``.
+    Returns a ``Play`` of 0.0 (``starts_in_contact`` True) when it already overlaps and None when it never
+    touches within ``max_mm``. The search is bounded: at most 101 coarse steps plus at most 60 bisection
+    steps, so under 170 overlap measurements whatever the geometry.
     """
     if max_mm <= 0 or resolution_mm <= 0:
         raise ValueError("max_mm and resolution_mm must be positive")
@@ -156,7 +214,7 @@ def play(moving: cq.Shape, against: Sequence[cq.Shape] | cq.Shape, direction: Ve
         return _overlap_against(moving.translate(tuple(vector * offset)), fixed) > tol_mm3
 
     if blocked(0.0):
-        return 0.0
+        return Play(0.0, starts_in_contact=True)
     # A coarse scan brackets the first contact cheaply; bisection then refines it.
     coarse = max(resolution_mm, max_mm / 100)
     free = 0.0
@@ -164,9 +222,13 @@ def play(moving: cq.Shape, against: Sequence[cq.Shape] | cq.Shape, direction: Ve
         offset = min(float(offset), max_mm)
         if blocked(offset):
             low, high = free, offset
-            while high - low > resolution_mm / 4:
+            # The cap matters: below float precision (resolution_mm near 1e-16 of the offset) the bracket stops
+            # shrinking and a bare while loop would never end.
+            for _ in range(60):
+                if high - low <= resolution_mm / 4:
+                    break
                 middle = (low + high) / 2
                 low, high = (low, middle) if blocked(middle) else (middle, high)
-            return (low + high) / 2
+            return Play((low + high) / 2)
         free = offset
     return None

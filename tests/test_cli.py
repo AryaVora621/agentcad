@@ -58,7 +58,7 @@ def test_check_human_output_is_a_table(cli, examples_dir, tmp_path):
     folder = tmp_path / "bracket"
     shutil.copytree(examples_dir / "bracket", folder, ignore=shutil.ignore_patterns("build"))
     code, out, _ = cli("check", folder)
-    assert code == 0 and out.splitlines()[-1] == "11 pass, 0 warn, 0 fail" and out.startswith("PASS")
+    assert code == 0 and out.splitlines()[-1].startswith("11 pass, 0 warn, 0 fail (build ") and out.startswith("PASS")
 
 
 def test_check_only_and_no_build(cli, examples_dir, tmp_path):
@@ -202,3 +202,32 @@ def test_json_flag_prints_a_single_document(cli, examples_dir, tmp_path):
     shutil.copytree(examples_dir / "bracket", folder, ignore=shutil.ignore_patterns("build"))
     _, out, err = cli("check", folder, "--json")
     assert json.loads(out) and err == ""
+
+
+def test_new_names_the_project_after_the_folder(cli, tmp_path):
+    for template in ("blank", "bracket", "box-with-lid"):
+        target = tmp_path / f"my {template}"
+        assert cli("new", target, "--template", template)[0] == 0
+        text = (target / "agentcad.toml").read_text()
+        assert f'name = "my {template}"' in text and text.count("name =") == 1
+        assert '[printer]' in text  # the rest of the config is untouched
+    code, out, _ = cli("check", tmp_path / "my bracket", "--json")
+    assert code == 0 and parse(out)["project"] == "my bracket"
+
+
+def test_check_reports_build_and_check_seconds(cli, copy_example):
+    folder = copy_example("bracket")
+    code, out, _ = cli("check", folder, "--json")
+    meta = parse(out)["meta"]
+    assert code == 0 and meta["build_s"] >= 0 and meta["elapsed_s"] >= 0
+    brief_meta = parse(cli("check", folder, "--json", "--brief")[1])["meta"]
+    assert set(brief_meta) == {"elapsed_s", "build_s", "build"}
+    table = cli("check", folder)[1].splitlines()[-1]
+    assert "build " in table and "checks " in table
+
+
+def test_brief_view_keeps_project_passes_as_compact_entries(cli, copy_example):
+    data = parse(cli("check", copy_example("box_with_lid"), "--json", "--brief")[1])
+    assert data["passed_checks"] and all(set(e) == {"id", "part", "summary"} for e in data["passed_checks"])
+    assert any(e["id"] == "lid_play_x" for e in data["passed_checks"])
+    assert "lid_play_x" not in data["passed"] and "valid" in data["passed"]

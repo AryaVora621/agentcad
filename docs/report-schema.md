@@ -17,7 +17,7 @@ Printed by `check`, `measure`, `interfere`, `overhang`, `wall`, `fit` and `docto
 | `exit_code` | int | 0, 1 (a FAIL) or 3 (only ERRORs) |
 | `counts` | object | number of checks per status: `pass`, `warn`, `fail`, `skip`, `error` |
 | `checks` | array | the checks, below |
-| `meta` | object | versions, printer, build folder, `elapsed_s` |
+| `meta` | object | versions, printer, build folder, `build_s` (seconds spent building; `check` always rebuilds unless `--no-build`) and `elapsed_s` (seconds spent in the checks only) |
 
 Each check:
 
@@ -29,8 +29,19 @@ Each check:
 | `summary` | string | one line a person or agent can act on |
 | `measured` | object | numbers with unit-suffixed keys (`area_mm2`, `value_mm`) |
 | `limit` | object | the thresholds used (`max_area_mm2`, `min_mm`) |
-| `where` | array | up to five worst locations: `centroid_mm`, `area_mm2` or `volume_mm3`, `z_mm` |
-| `hint` | string, optional | how to fix it; present only on a FAIL or WARN that knows a fix (every built-in gate does, and `ctx.expect(..., hint=...)` on a failure), at most about 220 characters, naming the numbers and the `Part` or config field to change |
+| `where` | array | up to five worst locations (ten open-edge clusters for `watertight`): `centroid_mm`, `area_mm2` or `volume_mm3`, `z_mm`, and always `frame` (below) |
+| `hint` | string, optional | how to fix it; present only on a FAIL or WARN that knows a fix (every built-in gate does, and `ctx.expect(..., hint=...)` on a failure), about 220 characters at most (the `watertight` hint is longer because it lists the seam causes), naming the numbers and the `Part` or config field to change |
+
+Every `where` entry names the frame its coordinates are in:
+
+| `frame` | Used by | Meaning |
+|---|---|---|
+| `"print"` | `watertight`, `overhang`, `min_wall` (and the other print-frame gates) | the part as it sits on the bed (`build/stl/*.stl`) |
+| `"use"` | `interference`, and `where` given to `ctx.expect` unless the entry sets its own `frame` | the assembly (`build/assembly/*.stl`) |
+
+A `watertight` FAIL puts the open or non-manifold edges in `where`, clustered by connectivity, at most 10, largest
+first: `{"centroid_mm", "extent_mm", "edges", "frame": "print"}` (centre of the cluster's bounding box, its size, the
+number of open edges); `measured.open_edges` is the total.
 
 ERROR means the check itself could not run (the project check raised, a gate hit an exception, or the model failed
 to build). It carries no `measured` values.
@@ -72,6 +83,7 @@ Example, from `agentcad check examples/bracket --json` with the checks trimmed t
     "bed_mm": [220, 220, 250],
     "frames": {"printability": "print", "fit": "use"},
     "build": ".../bracket/build",
+    "build_s": 0.35,
     "elapsed_s": 1.58
   }
 }
@@ -80,17 +92,18 @@ Example, from `agentcad check examples/bracket --json` with the checks trimmed t
 ### Brief view
 
 `check --json --brief` prints the same schema id with an extra `"view": "brief"` and compact separators, for
-agents that re-read the report after every edit. The full view is unchanged (no `view` or `passed` key).
+agents that re-read the report after every edit. The full view is unchanged (no `view`, `passed` or `passed_checks` key).
 
 | Field | Meaning |
 |---|---|
 | `view` | `"brief"` (absent in the full view) |
 | `schema`, `tool`, `project`, `status`, `exit_code`, `counts` | as in the full view |
 | `checks` | only checks that are not PASS (FAIL, ERROR, WARN, SKIP); `measured`, `limit` and `where` are left out when empty |
-| `passed` | the passing checks grouped by id: `{"valid": ["left", "right"], "interference": ["left+right"]}`; `"-"` stands for a check with no part |
-| `meta` | only `elapsed_s` and `build` |
+| `passed` | the passing built-in gates grouped by id: `{"valid": ["left", "right"], "interference": ["left+right"]}`; `"-"` stands for a check with no part |
+| `passed_checks` | the passing PROJECT checks (ids that are not built-in gates), kept as `{"id", "part", "summary"}` because they are the requirement checks an agent has to quote; the summary carries the measured value |
+| `meta` | only `elapsed_s`, `build_s` and `build` |
 
-`examples/broken` is about 18 KB in the full view and about 3 KB in the brief view; an all-pass project such as
+`examples/broken` is about 18 KB in the full view and about 3.3 KB in the brief view; an all-pass project such as
 `examples/bracket` is under 1 KB. `check --brief` without `--json` prints one row per non-PASS check with an
 indented `  hint:` line under each one that has a hint, then `N passed: valid x6, overhang x3, ...` and the totals line.
 

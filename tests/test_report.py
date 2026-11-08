@@ -71,7 +71,9 @@ def test_brief_json_keeps_only_what_needs_attention():
     assert data["checks"][0]["hint"] == "rotate it" and data["checks"][0]["measured"] == {"size_mm": [1, 2, 3]}
     # Empty measured, limit and where are dropped; a check with no hint carries no hint key.
     assert set(data["checks"][1]) == {"id", "part", "status", "summary"}
-    assert data["passed"] == {"valid": ["a", "b"], "wide": ["-"]}
+    # Built-in passes fold into ids; project requirement checks stay quotable as compact entries.
+    assert data["passed"] == {"valid": ["a", "b"]}
+    assert data["passed_checks"] == [{"id": "wide", "part": None, "summary": "s"}]
     assert data["meta"] == {"elapsed_s": 1.5, "build": "/x/build"}
 
 

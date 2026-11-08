@@ -36,6 +36,21 @@ All notable changes to this project are documented here. The format follows
   optional top-level field.
 - README, CLI reference, getting started and architecture documents cover all of the above.
 
+### Fixed (from three fresh-agent design runs: a ball wall mount, laser-cut panels, a snap-fit enclosure)
+- Checks can no longer run unbounded: `ctx.play`'s search is capped (it looped forever below float precision), a
+  probe that starts in contact returns 0 mm with `starts_in_contact`, each project check function has a 300 s soft
+  budget (`AGENTCAD_CHECK_BUDGET_S`) that turns it into an ERROR, and a 1800 s backstop
+  (`AGENTCAD_CHECK_TIMEOUT_S`) stops a stuck OCC boolean with a Python stack on stderr.
+- Report meta gains `build_s`, and the text totals line shows build and check time, so a rebuild is visible.
+- The brief view keeps passing project checks (the requirement checks an agent quotes) under `passed_checks`.
+- A custom `ctx.expect(summary=...)` keeps the measured value; `where` entries name their frame (`print` or `use`);
+  watertight failures locate the open edges in `where` and the hint covers revolve poles and tangent seams.
+- `ctx.section` adds `loop_list` (area, bounding box, perimeter, hole flag per outline).
+- `agentcad new DIR` names the project after DIR.
+- The skill gains a complete model.py skeleton with imports and probe patterns for openings, lift-out and retention;
+  the references gain snap-fit sizing (strain formula; limits come from the filament datasheet) and fixes for
+  revolve and tangent-seam leaks.
+
 ### Security
 - `agentcad skill install` refuses to write through a symlink planted inside the target project, so a hostile
   repository cannot redirect an install onto files elsewhere on disk.

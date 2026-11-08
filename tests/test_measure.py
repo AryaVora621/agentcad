@@ -163,3 +163,43 @@ def test_mesh_fallback_catches_a_shell_only_common(monkeypatch):
     detail = measure.overlap(a, b)
     assert detail["volume_mm3"] == pytest.approx(100, rel=1e-2)
     assert detail["centroid_mm"][0] == pytest.approx(9.5, abs=0.1)
+
+
+# -- bounded motion search and section outlines ------------------------------------------------------------------
+
+def test_play_that_starts_in_contact_is_zero_and_flagged():
+    found = measure.play(block(10, 10, 10), [block(10, 10, 10, (5, 0, 0))], (1, 0, 0), max_mm=3)
+    assert found == 0.0 and found.starts_in_contact is True
+    free = measure.play(block(10, 10, 10), [block(10, 10, 10, (12, 0, 0))], (1, 0, 0), max_mm=5)
+    assert free == pytest.approx(2.0, abs=0.02) and free.starts_in_contact is False
+
+
+def test_play_terminates_when_resolution_is_below_float_precision():
+    # Bisection used to loop forever once the bracket could not shrink below resolution / 4.
+    calls = []
+    real = measure._overlap_against
+    measure._overlap_against = lambda moved, fixed: calls.append(1) or real(moved, fixed)
+    try:
+        found = measure.play(block(10, 10, 10), [block(10, 10, 10, (12, 0, 0))], (1, 0, 0), max_mm=5,
+                             resolution_mm=1e-18)
+    finally:
+        measure._overlap_against = real
+    assert found == pytest.approx(2.0, abs=1e-3) and len(calls) <= 170
+
+
+def test_time_limit_stops_a_measurement_loop_with_a_clear_error():
+    a, b = block(10, 10, 10), block(10, 10, 10, (5, 0, 0))
+    with measure.time_limit(1e-9, "probe loop"), pytest.raises(measure.CheckTimeout, match="probe loop.*time budget"):
+        measure.slide(a, [b], (1, 0, 0), 5, steps=40)
+    assert measure.interference(a, b) == pytest.approx(500, rel=1e-3)  # the limit does not outlive the block
+
+
+def test_section_lists_each_outline_with_its_size_and_hole_flag():
+    plate = cq.Workplane("XY").box(20, 20, 10).faces(">Z").workplane().rect(8, 4).cutThruAll().val()
+    cut = measure.section(plate, "z", 0)
+    assert cut["loops"] == 2 and len(cut["loop_list"]) == 2
+    outer, hole = sorted(cut["loop_list"], key=lambda loop: loop["hole"])
+    assert outer["hole"] is False and outer["area_mm2"] == pytest.approx(400) and outer["perimeter_mm"] == pytest.approx(80)
+    assert hole["hole"] is True and hole["area_mm2"] == pytest.approx(32)
+    assert sorted(hole["bbox_mm"]["size_mm"][:2]) == pytest.approx([4, 8]) and hole["perimeter_mm"] == pytest.approx(24)
+    assert measure.section(plate, "z", 50)["loop_list"] == []

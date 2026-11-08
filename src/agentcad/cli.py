@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import faulthandler
 import json
 import os
 import platform
@@ -229,6 +230,7 @@ def _new(args: argparse.Namespace) -> int:
     if target.exists() and (not target.is_dir() or any(target.iterdir())):
         raise UsageError(f"{target} exists and is not empty")
     shutil.copytree(SCAFFOLD / args.template, target, dirs_exist_ok=True, ignore=shutil.ignore_patterns("__pycache__"))
+    _name_project(target / "agentcad.toml", target.resolve().name)
     files = sorted(p.relative_to(target).as_posix() for p in target.rglob("*") if p.is_file())
     if args.json:
         print(json.dumps({"schema": "agentcad.new/1", "path": str(target.resolve()), "template": args.template,
@@ -237,6 +239,16 @@ def _new(args: argparse.Namespace) -> int:
         print(f"created {target} from template '{args.template}': {', '.join(files)}")
         print(f"next: cd {target} && agentcad check")
     return 0
+
+
+def _name_project(config: Path, name: str) -> None:
+    """Replace the template's placeholder project.name with the folder name, so renders and reports are not mislabelled."""
+    if not config.is_file():
+        return
+    text = config.read_text()
+    # json.dumps gives a valid TOML basic string for any folder name (quotes, backslashes, unicode).
+    renamed = re.sub(r'(?m)^name\s*=\s*"[^"\n]*"', lambda _: f"name = {json.dumps(name)}", text, count=1)
+    config.write_text(renamed)
 
 
 def _build(args: argparse.Namespace) -> int:
@@ -251,18 +263,47 @@ def _build(args: argparse.Namespace) -> int:
     return 0
 
 
+def _hard_timeout_s() -> float:
+    """Seconds after which a still-running check is killed with a stack dump (AGENTCAD_CHECK_TIMEOUT_S, default 1800)."""
+    try:
+        value = float(os.environ.get("AGENTCAD_CHECK_TIMEOUT_S", "1800"))
+    except ValueError:
+        value = 1800.0
+    return value if value > 0 else 1e9
+
+
+def _arm_backstop() -> bool:
+    """Start the hard timer; False when no real stderr is available (some embedders replace sys.stderr)."""
+    for stream in (sys.stderr, sys.__stderr__):
+        try:
+            faulthandler.dump_traceback_later(_hard_timeout_s(), exit=True, file=stream)
+            return True
+        except (OSError, ValueError, AttributeError):  # io.UnsupportedOperation is an OSError
+            continue
+    return False
+
+
 def _check(args: argparse.Namespace) -> int:
     only = [i.strip() for i in args.only.split(",") if i.strip()] if args.only else None
     path = Path(args.project)
+    build_started = time.perf_counter()
     try:
         project = Project.load(path)
         result = existing_build(project) if args.no_build else build(project)
+        build_s = time.perf_counter() - build_started
     except BuildError as exc:
         # The model code raised or produced no valid solid: report it as an ERROR check, exit 3.
         name = path.resolve().name if path.is_dir() else path.resolve().parent.name
         return _emit(args, Report("check", name, [Check("valid", None, Status.ERROR, str(exc))],
                                   {"agentcad": __version__}))
-    report = run_checks(project, result, only)
+    # OCC booleans cannot be interrupted from Python, so a truly endless one is only stopped by this C-level timer,
+    # which prints the Python stack (the project check line that was running) and exits.
+    armed = _arm_backstop()
+    try:
+        report = run_checks(project, result, only, build_s=build_s)
+    finally:
+        if armed:
+            faulthandler.cancel_dump_traceback_later()
     if only and not report.checks:
         raise UsageError(f"--only {args.only!r} matched no check")
     (result.path / "report.json").write_text(report.to_json() + "\n")

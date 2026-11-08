@@ -150,7 +150,7 @@ def test_expect_records_pass_and_fail_with_units(make_project):
     report = check_project(make_project(model), only=["vol", "small", "low"])
     vol, small, low = report.checks
     assert vol.status is Status.PASS and vol.measured == {"value_mm3": 1000.0} and vol.limit == {"min_mm3": 900, "max_mm3": 1100}
-    assert small.status is Status.FAIL and small.summary == "custom words"
+    assert small.status is Status.FAIL and small.summary == "custom words: 5 mm"
     assert low.status is Status.FAIL and low.limit == {"min_mm": 6}
 
 
@@ -253,3 +253,118 @@ def test_expect_hint_is_kept_on_fail_and_dropped_on_pass(make_project):
     assert bad.status is Status.FAIL and bad.hint == "make it bigger"
     assert good.status is Status.PASS and good.hint is None
     assert plain.hint is None
+
+
+# -- hang guards, summaries, frames ------------------------------------------------------------------------------
+
+def test_expect_custom_summary_keeps_the_measured_value(make_project):
+    model = one_part(BOX.format(10, 10, 10)) + (
+        "\ndef checks(ctx):\n    ctx.expect('a', 0.2006, min=0.15, max=0.3, summary='lid side play')\n"
+        "    ctx.expect('b', 0.2006, min=0.15, max=0.3, summary='play is 0.2006 mm')\n"
+        "    ctx.expect('c', 4.0, max=3.0, unit='mm3', summary='clash')\n")
+    a, b, c = check_project(make_project(model), only=["a", "b", "c"]).checks
+    assert a.summary == "lid side play: 0.2006 mm"
+    assert b.summary == "play is 0.2006 mm"  # already shows the value
+    assert c.summary == "clash: 4 mm3"
+
+
+def test_play_from_inside_the_wall_returns_promptly_and_says_it_starts_in_contact(make_project):
+    model = one_part(BOX.format(20, 20, 10)) + (
+        "\ndef checks(ctx):\n"
+        "    probe = cq.Workplane('XY').box(4, 4, 4, centered=(True, True, False)).translate((8, 0, 0))\n"
+        "    ctx.expect('probe_play', ctx.play(probe, 'p', (1, 0, 0), max_mm=3), min=0.2, part='p')\n")
+    check = check_project(make_project(model), only=["probe_play"]).checks[0]
+    assert check.status is Status.FAIL and check.measured["starts_in_contact"] is True
+    assert check.measured["value_mm"] == 0.0 and "starts in contact" in check.summary
+
+
+def test_a_slow_project_check_hits_its_budget_and_the_others_still_run(make_project, monkeypatch):
+    monkeypatch.setenv("AGENTCAD_CHECK_BUDGET_S", "0.000001")
+    model = one_part(BOX.format(10, 10, 10)) + (
+        "\ndef check_slow(ctx):\n"
+        "    ctx.slide(cq.Workplane('XY').box(2, 2, 2), 'p', (1, 0, 0), 5, steps=40)\n"
+        "\ndef check_fast(ctx):\n    ctx.expect('fast', 1.0, min=0)\n")
+    report = check_project(make_project(model), only=["check_slow", "fast"])
+    slow = by_id(report, "check_slow")[0]
+    assert slow.status is Status.ERROR and "time budget" in slow.summary and "check_slow()" in slow.summary
+    assert by_id(report, "fast")[0].status is Status.PASS
+
+
+def test_check_budget_env_parsing(monkeypatch):
+    monkeypatch.delenv("AGENTCAD_CHECK_BUDGET_S", raising=False)
+    assert gates.check_budget_s() == gates.DEFAULT_CHECK_BUDGET_S
+    monkeypatch.setenv("AGENTCAD_CHECK_BUDGET_S", "0")
+    assert gates.check_budget_s() is None
+    monkeypatch.setenv("AGENTCAD_CHECK_BUDGET_S", "oops")
+    assert gates.check_budget_s() == gates.DEFAULT_CHECK_BUDGET_S
+
+
+def test_tiny_snap_bump_does_not_stall_the_play_search(make_project):
+    # The eval-3 shape: a lid skirt with a 0.0001 mm bump over a base groove, searched with play and slide.
+    model = '''
+import cadquery as cq
+from agentcad import Part, Pose
+
+def parts():
+    base = cq.Workplane("XY").box(30, 20, 10, centered=(True, True, False))
+    lid = (cq.Workplane("XY").box(31, 21, 6, centered=(True, True, False))
+           .cut(cq.Workplane("XY").box(30.4, 20.4, 5, centered=(True, True, False))))
+    bump = cq.Workplane("YZ").polyline([(10.2, 2), (10.2, 2.0002), (10.1999, 2.0001)]).close().extrude(4, both=True)
+    return [Part("base", base), Part("lid", lid.union(bump), use=Pose(z=10))]
+
+def checks(ctx):
+    ctx.expect("side_play", ctx.play("lid", "base", (1, 0, 0), max_mm=2) or 0.0, min=0.0)
+    ctx.expect("retain", max(s["overlap_mm3"] for s in ctx.slide("lid", "base", (0, 0, 1), 4, steps=20)), min=0)
+'''
+    report = check_project(make_project(model), only=["side_play", "retain"])
+    assert [c.status for c in report.checks] == [Status.PASS, Status.PASS]
+
+
+def test_watertight_fail_lists_open_edge_clusters_in_the_print_frame():
+    mesh = trimesh.creation.box((10, 10, 10))
+    mesh.update_faces(list(range(len(mesh.faces) - 1)))
+    check = gates._watertight("p", mesh)
+    assert check.status is Status.FAIL and check.measured["open_edges"] >= 3
+    assert 1 <= len(check.where) <= 10
+    entry = check.where[0]
+    assert entry["frame"] == "print" and set(entry) == {"centroid_mm", "extent_mm", "edges", "frame"}
+    assert all(abs(c) <= 5.0001 for c in entry["centroid_mm"]) and max(entry["extent_mm"]) > 0
+    for word in ("revolve", "sphere", "seam"):
+        assert word in check.hint
+
+
+def test_watertight_clusters_are_capped_at_ten_largest_first():
+    mesh = trimesh.creation.box((10, 10, 10))
+    pieces = [mesh.copy().apply_translation((30 * i, 0, 0)) for i in range(14)]
+    for i, piece in enumerate(pieces):
+        piece.update_faces(list(range(len(piece.faces) - 1 - (i % 2))))
+    check = gates._watertight("p", trimesh.util.concatenate(pieces))
+    assert len(check.where) == 10
+    edges = [e["edges"] for e in check.where]
+    assert edges == sorted(edges, reverse=True)
+
+
+def test_where_entries_carry_their_frame(broken_report):
+    for id, frame in (("overhang", "print"), ("min_wall", "print"), ("interference", "use")):
+        with_where = [c for c in by_id(broken_report, id) if c.where]
+        assert with_where and all(e["frame"] == frame for c in with_where for e in c.where)
+
+
+def test_project_checks_default_their_where_to_the_use_frame(make_project):
+    model = one_part(BOX.format(10, 10, 10)) + (
+        "\ndef checks(ctx):\n    ctx.expect('loc', 5.0, min=6, where=[{'centroid_mm': [1, 2, 3]}])\n"
+        "    ctx.expect('own', 5.0, min=6, where=[{'centroid_mm': [1, 2, 3], 'frame': 'print'}])\n")
+    loc, own = check_project(make_project(model), only=["loc", "own"]).checks
+    assert loc.where == [{"centroid_mm": [1, 2, 3], "frame": "use"}] and own.where[0]["frame"] == "print"
+
+
+def test_report_meta_has_build_seconds_when_the_caller_passes_it(copy_example):
+    from agentcad.build import build
+    from agentcad.checks import run_checks
+    from agentcad.project import Project
+
+    project = Project.load(copy_example("bracket"))
+    report = run_checks(project, build(project), only=["valid"], build_s=1.234)
+    assert report.meta["build_s"] == 1.23 and report.meta["elapsed_s"] >= 0
+    assert report.to_table().splitlines()[-1].endswith("(build 1.23 s, checks " + f"{report.meta['elapsed_s']:g} s)")
+    assert run_checks(project, build(project), only=["valid"]).meta.get("build_s") is None

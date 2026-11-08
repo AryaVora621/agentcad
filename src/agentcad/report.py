@@ -113,14 +113,23 @@ class Report:
                 if not entry[key]:
                     del entry[key]
             attention.append(entry)
+        # Imported here because checks imports this module. Project checks are the requirement checks an agent has
+        # to quote, so their passes keep their summary; built-in passes fold into ids.
+        from .checks import BUILTIN_IDS
+
         passed: dict[str, list[str]] = {}
+        passed_checks: list[dict] = []
         for c in self.checks:
-            if c.status is Status.PASS:
+            if c.status is not Status.PASS:
+                continue
+            if self.tool == "check" and c.id not in BUILTIN_IDS:
+                passed_checks.append({"id": c.id, "part": c.part, "summary": c.summary})
+            else:
                 passed.setdefault(c.id, []).append(c.part or "-")
-        meta = {k: self.meta[k] for k in ("elapsed_s", "build") if k in self.meta}
+        meta = {k: self.meta[k] for k in ("elapsed_s", "build_s", "build") if k in self.meta}
         document = {"schema": SCHEMA, "view": "brief", "tool": self.tool, "project": self.project,
                     "status": self.status(), "exit_code": self.exit_code(), "counts": self.counts(),
-                    "checks": attention, "passed": passed, "meta": meta}
+                    "checks": attention, "passed": passed, "passed_checks": passed_checks, "meta": meta}
         return json.dumps(json_value(document), separators=(",", ":"), allow_nan=False)
 
     def to_brief_table(self) -> str:
@@ -153,4 +162,7 @@ class Report:
             total += f", {n['error']} error"
         if n["skip"]:
             total += f", {n['skip']} skip"
+        # Both times, so a reader can tell the model was rebuilt (build_s) from how long the gates took (elapsed_s).
+        if "build_s" in self.meta and "elapsed_s" in self.meta:
+            total += f" (build {self.meta['build_s']:g} s, checks {self.meta['elapsed_s']:g} s)"
         return "\n".join([*lines, total])
