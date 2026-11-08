@@ -76,6 +76,15 @@ def _reference_names() -> list[str]:
     return sorted(p.stem for p in refs.glob("*.md")) if refs.is_dir() else []
 
 
+def _no_symlinks(root: Path, target: Path) -> None:
+    """Refuse to write through a symlink planted inside a project (a hostile repo could aim one at ~/.ssh)."""
+    current = root
+    for part in target.relative_to(root).parts:
+        current = current / part
+        if current.is_symlink():
+            raise _usage_error(f"refusing to write through the symlink {current}; remove it or install elsewhere")
+
+
 def _files(root: Path) -> dict[str, bytes]:
     return {p.relative_to(root).as_posix(): p.read_bytes()
             for p in sorted(root.rglob("*")) if p.is_file() and "__pycache__" not in p.parts}
@@ -164,6 +173,8 @@ def _install_cursor(args: argparse.Namespace, root: Path) -> int:
     state = [(root / rel).is_file() for rel in rels]
     # Report the rule file itself, not whichever reference sorts first.
     rule = root / ".cursor/rules/agentcad.mdc"
+    for rel in rels:
+        _no_symlinks(root, root / rel)
     if all(state) and all((root / rel).read_bytes() == wanted[rel] for rel in rels):
         return _result(args, "install", rule, "unchanged", rels)
     clash = [root / rel for rel in rels if (root / rel).exists() and not (root / rel).is_file()]
@@ -183,6 +194,7 @@ def _install_cursor(args: argparse.Namespace, root: Path) -> int:
 def _install_agents_md(args: argparse.Namespace, root: Path) -> int:
     dest = root / "AGENTS.md"
     block = AGENTS_BLOCK
+    _no_symlinks(root, dest)
     if not dest.exists():
         root.mkdir(parents=True, exist_ok=True)
         dest.write_text(block, encoding="utf-8")
@@ -213,8 +225,11 @@ def _install_agents_md(args: argparse.Namespace, root: Path) -> int:
 def _install(args: argparse.Namespace) -> int:
     host = args.host
     if host == "claude":
-        base = Path(args.project) / ".claude" if args.project else _home() / ".claude"
-        return _install_folder(args, base / "skills" / "agentcad")
+        if args.project:
+            # Only the project's own folders are checked: a symlinked ~/.claude (dotfile managers) is legitimate.
+            _no_symlinks(Path(args.project), Path(args.project) / ".claude" / "skills")
+            return _install_folder(args, Path(args.project) / ".claude" / "skills" / "agentcad")
+        return _install_folder(args, _home() / ".claude" / "skills" / "agentcad")
     if host == "codex":
         if args.link:
             raise _usage_error("codex skips symlinked skills; install without --link")

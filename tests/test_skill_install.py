@@ -274,3 +274,16 @@ def test_nothing_written_outside_sandbox(capsys, sandbox):
     assert not (real / ".claude").exists() and not (real / ".cursor").exists() and not (real / "AGENTS.md").exists()
     top = {p.name for p in sandbox.iterdir()}
     assert top <= {"home", "codex", "work", "c", "a"}
+
+
+def test_project_installs_refuse_planted_symlinks(tmp_path, monkeypatch):
+    # A hostile repo could point .cursor/rules or AGENTS.md at a file outside the project.
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    for host, plant in (("cursor", ".cursor"), ("agents-md", "AGENTS.md"), ("claude", ".claude")):
+        project = tmp_path / f"repo-{host}"
+        project.mkdir()
+        (project / plant).symlink_to(outside / plant if plant == "AGENTS.md" else outside)
+        assert cli.main(["skill", "install", "--host", host, "--project", str(project), "--force"]) == 2
+    assert list(outside.iterdir()) == []
