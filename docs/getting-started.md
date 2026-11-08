@@ -160,10 +160,80 @@ you can keep it open while you edit: run `agentcad check` or `agentcad build` af
 Load the STL from `build/stl/` into your slicer. Parts are already oriented and sitting on z = 0. Check the part
 count against the `qty` field in `Part`.
 
+## 9. A laser-cut part
+
+Sheet parts use the same loop. Create a project and add a `[flat]` section to its `agentcad.toml`:
+
+```bash
+agentcad new my-plate --template blank
+cd my-plate
+```
+
+```toml
+[flat]
+sheet = [600, 400]   # usable sheet in mm
+kerf_mm = 0.15       # material the laser removes
+```
+
+Replace `model.py` with a 3 mm plate and mark it with `cut="laser"` (`"cnc"` and `"waterjet"` also work). This version
+has a deliberate mistake, a 0.1 mm slot that the 0.15 mm kerf would close up. `examples/flat_panel` in the source
+tree is a fuller example.
+
+```python
+import cadquery as cq
+from agentcad import Part
+
+W, H, T = 120.0, 80.0, 3.0  # mm, a 3 mm plywood plate
+
+
+def parts():
+    plate = cq.Workplane("XY").box(W, H, T, centered=(True, True, False)).edges("|Z").fillet(5)
+    plate = plate.faces(">Z").workplane().pushPoints([(-50, -30), (50, -30), (-50, 30), (50, 30)]).hole(3.2)
+    plate = plate.cut(cq.Workplane("XY").rect(0.1, 30).extrude(T * 3, both=True))
+    return [Part("plate", plate, cut="laser", material="3 mm birch plywood")]
+```
+
+```bash
+agentcad check --brief
+```
+
+```text
+FAIL   min_feature  plate  0 web(s) under 1 mm and 1 slot(s) under the 0.15 mm kerf; worst slot near (60.0, 40.0)
+  hint: Widen webs and tabs to at least 1 mm and slots to more than 0.15 mm, or drop them; they burn out, break or close up when cut.
+5 passed: valid x1, single_solid x1, flat_profile x1, sheet_fit x1, hole_size x1
+5 pass, 0 warn, 1 fail, 1 skip
+```
+
+The coordinates in `where` are sheet coordinates: the lower left corner of the outline is (0, 0), the same as in the
+DXF. Widen the slot to 3.2 mm (`rect(3.2, 30)`) and run the check again: all flat gates pass. The 3D printing gates
+(`bed_fit`, `overhang` and the others) do not run for a cut part; the five flat gates do. `agentcad build` now also
+writes the files for the cutter:
+
+| Path | Contents |
+|---|---|
+| `build/dxf/plate.dxf` | the profile in millimetres, layer `CUT`, for the laser software |
+| `build/svg/plate.svg` | the same profile as an SVG |
+
+The `flat` record in `build/manifest.json` has the thickness, profile area and cut length. The gates, their limits and
+kerf compensation are in [flat.md](flat.md).
+
+## 10. A drawing
+
+```bash
+agentcad drawing
+```
+
+This writes `build/drawings/plate.svg`, `.pdf` and `.png`: front, top, right and isometric views, the overall
+width, height and thickness, the four holes as "4x Ø3.2" with their positions, and a title block with the material.
+Open the PNG and look at it. Every number on the sheet is read from the built solid, so it cannot disagree with the
+geometry. `agentcad drawing --json` lists each dimension as data (`role`, `value_mm`), which is how you check a
+number without reading the image. See [drawings.md](drawings.md).
+
 ## Next steps
 
 - Write your own checks. Start from a requirement ("the lid lifts off", "an M4 screw passes through"), build a probe solid
   for the mating thing, and assert on the measurement. Prove each check can fail.
-- Use it from an agent. Copy or symlink `skills/agentcad` into `~/.claude/skills/` (Claude Code), or point your agent's
-  instructions file at `skills/agentcad/SKILL.md`. The skill teaches the loop and the traps.
+- Use it from an agent. `agentcad skill install` installs the skill for Claude Code; add `--host codex`, `--host cursor`
+  or `--host agents-md` for other tools. For MCP clients see [mcp.md](mcp.md). Agents read `agentcad api` instead of
+  guessing names, and `agentcad check --json --brief` keeps each pass of the loop short.
 - Read the [CLI reference](cli.md) and the [report schema](report-schema.md).

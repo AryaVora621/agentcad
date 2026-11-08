@@ -4,7 +4,7 @@ from importlib.metadata import PackageNotFoundError, version
 try:
     __version__ = version("agentcad")
 except PackageNotFoundError:  # running from a source tree that is not installed
-    __version__ = "0.1.0"
+    __version__ = "0.2.0"
 
 from .checks import CheckContext
 from .model import Part, Pose

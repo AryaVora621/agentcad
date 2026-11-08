@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "agentcad"
-version = "0.1.0"
+version = "0.2.0"
 description = "CAD for AI agents: model parts in code, then prove them by measuring the built solids."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -35,8 +35,9 @@ dependencies = [
 [project.optional-dependencies]
 # ruff is pinned to a minor version because its default rule set changes between releases
 dev = ["pytest>=8", "ruff>=0.17,<0.18"]
-# the MCP server is optional so the CLI does not pull in an HTTP/async stack
-mcp = ["mcp>=2.3,<3"]
+# the MCP server is optional so the CLI does not pull in an HTTP/async stack; capped below 2.4 because
+# mcp_server.py reaches two SDK internals (_lowlevel_server, _tool_manager) that a minor release may rename
+mcp = ["mcp>=2.3,<2.4"]
 
 [project.scripts]
 agentcad = "agentcad.cli:main"

@@ -41,16 +41,23 @@ src/agentcad/
   wall.py                 ray-cast wall thickness (port of the stlwall tool)
   printers.py             built-in printer profiles + user profiles
   checks.py               CheckContext and the built-in gates run by `agentcad check`
+  flat.py                 2D cut parts: section profile, DXF and SVG export, the five flat gates
   build.py                build pipeline: build parts, export files, write manifest.json
   diff.py                 manifest diff
   render.py               offscreen VTK renders (multi-view sheet, section views)
+  drawing.py              dimensioned SVG, PDF and PNG drawings from the built solids
+  api.py                  `agentcad api`: commands, ctx helpers, config keys and gates read from the code
+  skill_install.py        `agentcad skill`: install, show or locate the agent skill
+  mcp_server.py           `agentcad mcp`: the CLI as MCP tools on stdio (needs the `mcp` extra)
   viewer/                 local three.js viewer (port of the cadview tool): server.py + static/index.html
   scaffold/               `agentcad new` templates
   cli.py                  argparse entry point for every subcommand
-skills/agentcad/          agent skill (SKILL.md + references/) for Claude Code and other agents
-examples/                 bracket, box_with_lid, broken (a project where every gate must FAIL)
+skills/agentcad/          agent skill (SKILL.md + references/) for Claude Code and other agents; packed into the
+                          wheel and found by `agentcad skill`
+examples/                 bracket, box_with_lid, flat_panel, broken (a project where every gate must FAIL)
 tests/                    pytest suite with known-answer fixtures
-docs/                     this file, CLI reference, report schema
+docs/                     this file, CLI reference, report schema, flat parts, drawings, MCP server
+llms.txt                  index of the docs and the skill for agents that read a project index
 ```
 
 ## 3. Data model (`model.py`)
@@ -74,6 +81,8 @@ class Part:
     material: str | None = None                   # free text, e.g. "PETG"
     color: str | None = None                      # "#rrggbb", used by render and view
     printed: bool = True                          # False for bought parts: skip print gates
+    cut: Literal["laser", "cnc", "waterjet"] | None = None   # a sheet part: print frame is the cutting frame, the
+                                                  # 3D printing gates are skipped and the flat gates run (section 12)
     def solid(self, frame: Literal["model", "use", "print"]) -> cq.Shape
 ```
 
@@ -105,6 +114,14 @@ first_layer_mm = 0.3           # downward faces centred below this print with th
 min_wall_mm = 0                # 0 disables the wall gate; otherwise FAIL below this
 interference_tol_mm3 = 0.01    # overlap below this counts as touching
 allow_overlap = [["lid", "box"]]   # pairs that may overlap in the use pose (press fits, snap barbs)
+
+[flat]                         # only used by parts with cut=...; defaults and meaning in section 12
+sheet = [600, 400]
+kerf_mm = 0.15
+min_feature_mm = 1.0
+tool_diameter_mm = 3.175
+min_hole_ratio = 1.0
+compensate_kerf = false
 ```
 
 Every key is optional except `project.module`. Unknown keys are a config error (exit 2) so typos do not silently
@@ -127,6 +144,7 @@ class Check:
     measured: dict             # numbers with unit-suffixed keys: {"area_mm2": 41.2, "z_mm": [0.0, 12.4]}
     limit: dict                # the thresholds used: {"max_area_mm2": 25}
     where: list[dict] = []     # up to 5 worst locations: {"centroid_mm": [x,y,z], "area_mm2": .., "z_mm": [..]}
+    hint: str | None = None    # how to fix a FAIL or WARN, naming the numbers and the Part or config field
 
 @dataclass
 class Report:
@@ -136,8 +154,10 @@ class Report:
     meta: dict                 # agentcad version, cadquery version, elapsed_s, printer, frame used
     def status(self) -> Status # FAIL if any FAIL/ERROR, else WARN if any WARN, else PASS
     def exit_code(self) -> int # 0 / 1, ERROR maps to 3
-    def to_json(self) -> str   # {"schema": "agentcad.report/1", ...}, floats rounded to 4 decimal places
+    def to_json(self, view="full") -> str   # {"schema": "agentcad.report/1", ...}, floats rounded to 4 decimal places;
+                                            # view="brief" keeps only non-PASS checks and groups the rest in "passed"
     def to_table(self) -> str  # one line per check: STATUS  id  part  summary; last line "N pass, N warn, N fail"
+    def to_brief_table(self) -> str   # non-PASS rows with an indented "hint:" line, then "N passed: id xN, ..." and totals
 ```
 
 The JSON schema is documented in `docs/report-schema.md` and is stable within a major version.
@@ -207,6 +227,11 @@ FAIL. `section` sums cut areas per shape (fusing touching solids fails in OCCT),
 | `overhang` | printed part | unsupported area > `overhang_allow_mm2` |
 | `min_wall` | printed part | enabled by `min_wall_mm > 0`; FAIL when p1 < `min_wall_mm` |
 | `interference` | each part pair | use-pose overlap > `interference_tol_mm3`, unless the pair is in `allow_overlap` |
+| `flat_profile`, `sheet_fit`, `min_feature`, `inner_corners`, `hole_size` | cut part | see section 12 |
+
+Parts with `cut` set are left out of the five 3D printing gates (`watertight`, `bed_fit`, `bed_contact`, `overhang`,
+`min_wall`); `valid`, `single_solid` and `interference` still run. `checks._builtin` appends `flat.flat_gates(ctx,
+wanted)` after the other gates. Every built-in FAIL or WARN carries a `hint`.
 
 Then it calls the project's `checks(ctx)` if defined. `CheckContext` gives project checks:
 
@@ -244,11 +269,14 @@ step/<part>.step      model frame
 stl/<part>.stl        print frame (on z = 0, XY centred)
 assembly/<part>.stl   use frame
 assembly.step         every part in the use frame, one named solid per part
+dxf/<part>.dxf        cut parts only: the profile in mm, layer CUT
+svg/<part>.svg        cut parts only: the same loops, sized in mm
 ```
 
 The build is atomic: it writes into `build/.tmp-<pid>` and swaps each output entry in only on success, so a crashed
 build never leaves stale files that look fresh, while `build/renders/` and `report.json` survive a rebuild. The
-manifest also records `files` and `sources` (sha256), which `check --no-build` uses to refuse a stale build.
+manifest entry of a cut part also holds `cut` and a `flat` record (thickness, profile area, cut length, hole count,
+outline, kerf settings, file hashes). The manifest also records `files` and `sources` (sha256), which `check --no-build` uses to refuse a stale build.
 `report.json` is written next to `manifest.json` by `agentcad check`; reports also carry `status`, `exit_code` and
 `counts`.
 
@@ -257,7 +285,7 @@ manifest also records `files` and `sources` (sha256), which `check --no-build` u
 ```
 agentcad new DIR [--template blank|bracket|box-with-lid]
 agentcad build [PROJECT] [--out DIR] [--json]
-agentcad check [PROJECT] [--json] [--only ID,ID] [--no-build]
+agentcad check [PROJECT] [--json] [--only ID,ID] [--no-build] [--brief]
 agentcad measure FILE... [--json]                 bbox, volume, area, CoM, solids/watertight for STEP or meshes
 agentcad interfere FILE... [--json] [--tol MM3]   pairwise overlap between files as placed
 agentcad overhang FILE... [--max-deg 45] [--allow MM2] [--first-layer MM] [--json]
@@ -272,10 +300,17 @@ agentcad diff OLD NEW [--json]                    compare two manifest.json file
                                                   part set); schema agentcad.diff/1, exit 0 whenever it can compare
 agentcad printers [--json]
 agentcad doctor [--json]                          versions, VTK offscreen check, write access
+agentcad drawing [PROJECT|FILE ...] [-o DIR] [--parts NAME,NAME] [--format svg,pdf,png]
+                 [--projection third|first] [--sheet auto|A4|A3|letter|tabloid] [--json]
+agentcad api [--json]                             commands, ctx helpers, config keys, gates
+agentcad skill {install|show|path} [--host claude|codex|cursor|agents-md] [--project DIR] [--link] [--force]
+               [--reference NAME] [--json]
+agentcad mcp [--root DIR]                         MCP server on stdio; no --json
 ```
 
 `PROJECT` defaults to the current folder. Commands that accept files work without a project. Exit codes as in
-section 1.
+section 1. `cli.py` imports `drawing`, `api`, `skill_install` and `mcp_server` lazily inside their handlers, so a
+command that does not need them never pays for their imports.
 
 ## 11. Render and viewer
 
@@ -288,15 +323,96 @@ section 1.
   `[::1]:<port>` get 403, which blocks DNS rebinding from other web pages. `python -m agentcad.viewer.server` keeps
   the command line of the standalone viewer it was ported from.
 
-## 12. Agent skill
+## 12. Flat parts (`flat.py`)
 
-`skills/agentcad/SKILL.md` teaches an agent the loop: scaffold, model, `agentcad check --json`, read FAILs, fix, render,
-look, repeat; how to turn every functional requirement into a `ctx.expect` or `ctx.slide` check; how to prove a check
-can fail; and the design-for-printing and CadQuery references in `skills/agentcad/references/`.
+A cut part is modelled as a 3D plate and `Part(..., cut="laser"|"cnc"|"waterjet")` marks it. Its print frame is the
+cutting frame: the sheet on `z = 0`, the thickness along `+z`. Everything is measured from a section of the built
+solid, never from a parameter.
 
-## 13. Roadmap after v0.1
+- `build_profile(solid, at=0.5, shift=None) -> Profile | None`: sections the print-frame solid at `at` times the
+  thickness and returns the outer loop and the holes as `Loop`s (polylines with arc bulges, circles recognised),
+  with the thickness, area and outline. Splines and ellipses are sampled to 0.005 mm. `None` when the plane misses
+  the part.
+- Gates, run by `flat_gates(ctx, wanted)` in `FLAT_IDS` order, one check per cut part, `where` in sheet coordinates
+  (outline lower left is 0, 0): `flat_profile` (volume against profile area times thickness, and sections at 10 and
+  90 percent against the middle one), `sheet_fit`, `min_feature` (morphological opening by half of
+  `min_feature_mm` for webs, closing by half of `kerf_mm` for slots), `inner_corners` (CNC only, closing by the tool
+  radius) and `hole_size`. The offsets run on manifold3d's `CrossSection` (Clipper2), which keeps tangent arcs and
+  collapsing features stable. Area tolerances and the exact limits are in [flat.md](flat.md).
+- `export_profile(solid, config, dxf_path, svg_path) -> dict` writes the DXF (R2010, layer `CUT`, circles and
+  `LWPOLYLINE` with bulges) and the SVG, optionally with `compensated_loops` (outline grown and holes shrunk by
+  `kerf_mm / 2`, re-anchored to 0, 0). The returned dict is the manifest's `flat` record. A hole or notch the
+  compensation would collapse raises `ValueError`, which `build.py` reports as a `BuildError` (exit 3).
+- `project.DEFAULT_FLAT` holds the `[flat]` defaults; unknown keys and bad values are `ConfigError`.
 
-- MCP server (`agentcad mcp`) exposing build, check, measure and render as tools, returning render PNGs inline.
+Limits: through-cuts only, one part per file (no nesting), settings are project-wide.
+
+## 13. Drawings (`drawing.py`)
+
+`make_drawings(inputs, out=None, parts=None, formats=("svg","pdf","png"), projection="third", sheet="auto") -> dict`
+turns each part of a project, or each STEP file, into a dimensioned sheet and returns the `agentcad.drawing/1`
+document. Meshes are refused (`ConfigError`) because they have no edges.
+
+- `project_views` projects the exact solid with OCCT hidden-line removal into front, top, right and isometric views;
+  visible sharp edges are solid, tangent edges thin, hidden edges dashed.
+- Dimensions come from the exact bounding box and from circular edges seen end-on (`Hole`), never from parameters:
+  overall width, height and depth, grouped diameter callouts, ordinate positions from the view's lower-left datum, or
+  an id table beyond eight hole centres.
+- `choose_sheet` picks the largest standard scale (10:1 to 1:50) at which views, dimension space and title block
+  fit; A4 landscape, or A3 only when it allows a strictly larger scale. `plan_sheet` places every text, dimension
+  and view so none overlaps another.
+- Output is deterministic: there are no dates, and the same input gives byte-identical SVG, PDF and PNG. The title block carries the first 12 hex digits of a sha256 of the part's STEP data
+  (`geometry_digest`).
+
+Layout rules, what is dimensioned and the JSON shape are in [drawings.md](drawings.md). Not covered: tolerances,
+section views, GD&T, threads, slots and angles.
+
+## 14. API description (`api.py`)
+
+`describe() -> dict` builds the `agentcad.api/1` document from the code itself, so it cannot drift: the commands and
+flags come from `cli._parser()`, the `CheckContext` methods and signatures from `inspect`, the config keys and
+defaults from `project`, the `Part` and `Pose` fields from the dataclasses, the gates from `GATE_DOCS` here plus
+`flat.GATE_DOCS`, and the printers, templates, frames and report fields. `cheat_sheet(doc) -> str` renders it as
+Markdown (about 6 KB; the JSON is about 12 KB). A new command, config key or gate shows up without editing the
+document by hand, but a new gate still needs a line in `GATE_DOCS`.
+
+## 15. Skill installer (`skill_install.py`)
+
+`skill_dir()` finds the skill: the copy packed into the wheel (`agentcad/_skill`), else `skills/agentcad` in the
+source tree. Hosts:
+
+- `claude` and `codex` copy (or, for `claude`, symlink with `--link`) the folder to `.claude/skills/agentcad` or
+  `$CODEX_HOME/skills/agentcad`.
+- `cursor` writes `.cursor/rules/agentcad.mdc` (the skill body with frontmatter) and the references next to it.
+- `agents-md` writes `AGENTS_BLOCK`, a condensed guide, between `<!-- agentcad:begin -->` and
+  `<!-- agentcad:end -->` in `AGENTS.md`, leaving the rest of the file untouched.
+
+Rules: an existing, different destination is refused unless `--force`; `--force` replaces a folder only when it holds
+a `SKILL.md`; inside `--project` nothing is written through a symlink (`_no_symlinks`), so a hostile repository
+cannot redirect an install. Every `agentcad <command>` named in `AGENTS_BLOCK` is checked against the real parser in
+the tests.
+
+## 16. MCP server (`mcp_server.py`)
+
+`agentcad mcp [--root DIR]` serves the CLI as MCP tools on stdio. Each tool builds an argv and runs `cli.main` in
+the same process, so a tool result is the command's own output without the per-call import cost, and its tools
+mirror the commands: `api`, `new_project`, `build`, `check`, `render`, `drawing`, `measure`, `interfere`,
+`overhang`, `wall`, `fit`, `diff`, `printers`, `skill` and `view`. It needs the `mcp` extra. Tools, arguments,
+the `--root` restriction and every other detail are in [mcp.md](mcp.md).
+
+## 17. Agent skill
+
+`skills/agentcad/SKILL.md` teaches an agent the loop: scaffold, model, `agentcad check --json --brief`, read FAILs and
+their hints, fix, render, look, repeat; `agentcad api` instead of guessing names; how to turn every functional
+requirement into a `ctx.expect` or `ctx.slide` check; how to prove a check can fail; the cut-part and drawing
+workflows; and the references in `skills/agentcad/references/` (design for printing, cut parts, CadQuery patterns,
+verification playbook). `agentcad skill` installs it, and `AGENTS_BLOCK` is its condensed form for hosts without a
+skill folder.
+
+## 18. Roadmap after v0.2
+
 - Sliding explode view in the viewer (per-part explode vectors from the manifest).
 - Slicer gate (OrcaSlicer / PrusaSlicer CLI) for support volume and print time.
 - build123d adapter for `Part.shape`.
+- Nesting several cut parts on one sheet.
+- Section views and tolerances on drawings.

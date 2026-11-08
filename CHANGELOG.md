@@ -4,6 +4,41 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [0.2.0] - unreleased
+
+### Added
+- Brief reports: `agentcad check --json --brief` keeps only the checks that need attention and groups the passing ones
+  by id. On `examples/broken` the report shrinks from 17,895 to 3,144 bytes (about 17.9 KB to 3.1 KB); an all-pass
+  project is under 1 KB.
+- Fix hints: every built-in gate adds a `hint` to a FAIL or WARN (the numbers and the `Part` or config field to
+  change), and `ctx.expect(..., hint=...)` takes one for project checks. The text table prints it under the row.
+- `agentcad api`: every command, `CheckContext` helper, config key with its default, gate id, printer profile and
+  frame in one document (`--json` for machines).
+- `agentcad skill install|show|path` for Claude Code, Codex, Cursor and AGENTS.md (`--host`, `--project`, `--link`,
+  `--force`), with a guard that refuses to write through a symlink inside a project. The skill ships in the wheel.
+- 2D cut parts for laser, CNC router and waterjet: `Part(..., cut="laser"|"cnc"|"waterjet")`, a `[flat]` config
+  section, DXF and SVG profile export (`build/dxf`, `build/svg`, a `flat` record in the manifest), optional kerf
+  compensation, and five gates: `flat_profile`, `sheet_fit`, `min_feature`, `inner_corners`, `hole_size`. New example
+  `examples/flat_panel`. Parts with `cut` set skip the 3D-printing gates.
+- `agentcad drawing`: dimensioned SVG, PDF and PNG sheets from the built solids (third or first angle, standard
+  scales, hole callouts and positions, title block, byte-identical output for the same input).
+- MCP server (`agentcad mcp`, extra `agentcad[mcp]`): 15 tools mirroring the CLI, renders and drawings returned as
+  images, the skill as a prompt and resources, `--root` confinement. CadQuery stays loaded, so a repeat `check` of
+  examples/bracket took about 1.1 s against 3.9 s for a cold CLI run on the development Mac. See
+  [docs/mcp.md](docs/mcp.md).
+- `llms.txt` for agents that read a project index.
+
+### Changed
+- The agent skill leads with the brief loop, `agentcad api` and the cut-part and drawing workflows, and gains
+  `references/cut-parts.md`. The AGENTS.md block gains one line each for cut parts and drawings.
+- `Report` JSON: the `agentcad.report/1` schema is unchanged; `hint` is an optional check field and `view` an
+  optional top-level field.
+- README, CLI reference, getting started and architecture documents cover all of the above.
+
+### Security
+- `agentcad skill install` refuses to write through a symlink planted inside the target project, so a hostile
+  repository cannot redirect an install onto files elsewhere on disk.
+
 ## [0.1.0] - unreleased
 
 ### Added

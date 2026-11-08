@@ -7,7 +7,7 @@ the same: a check is only as good as a fixture that makes it fail.
 
 ```bash
 uv venv --python 3.12 .venv
-uv pip install --python .venv/bin/python -e ".[dev]"
+uv pip install --python .venv/bin/python -e ".[dev,mcp]"
 .venv/bin/python -m pytest -q
 .venv/bin/ruff check src tests examples
 ```
@@ -20,7 +20,13 @@ uv pip install --python .venv/bin/python -e ".[dev]"
 - Keep `--json` output backward compatible within a schema version. Changing a field means a new schema version and
   a CHANGELOG entry.
 - Keep the CLI headless and deterministic: seed random sampling, no network access, no GUI outside `agentcad view`.
+- Every FAIL or WARN a gate can produce carries a `hint` naming the numbers and the `Part` or config field to change.
 - Update `docs/ARCHITECTURE.md` in the same change when you change a public function, CLI option or config key.
+- A new command, flag, config key or gate also goes into `docs/cli.md`, the skill (`skills/agentcad/SKILL.md` and its
+  references) and `AGENTS_BLOCK` in `src/agentcad/skill_install.py` when an agent needs it. `agentcad api` reads the
+  code, so check its output after the change. Keep `SKILL.md` near 200 lines: agents load it into context, so put
+  detail in `references/`.
+- Run every command you document at least once and paste its real output.
 
 ## Reporting bugs
 

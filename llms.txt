@@ -4,7 +4,7 @@
 
 ## Quick start for agents
 
-1. Install: `uv tool install agentcad` (Python 3.11 or newer).
+1. Install: `uv tool install 'agentcad[mcp] @ git+https://github.com/AryaVora621/agentcad'` (Python 3.11 or newer; drop `[mcp]` if you do not need the MCP server).
 2. Teach your agent the loop: `agentcad skill install` (use `--host codex`, `--host cursor` or `--host agents-md` for other tools).
 3. Read the full command, helper and gate list in one document: `agentcad api --json`.
 4. Run the loop: `agentcad new my-part`, edit `my-part/model.py` and `my-part/agentcad.toml`, then `agentcad check my-part --json --brief`. Fix the geometry where a FAIL says (`where`), render with `agentcad render my-part`, look at the sheet, and check again.

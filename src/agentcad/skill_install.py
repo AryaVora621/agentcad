@@ -44,8 +44,15 @@ Names and signatures: `agentcad api` prints every command, ctx helper, config ke
 Probe solids stand in for the mating thing (an M4 screw is a 4.0 mm cylinder). Build them from the requirement,
 never from the model's own parameters, or the check can never fail.
 
+Cut parts (laser, CNC, waterjet): mark a flat plate `Part(..., cut="laser")` and set `[flat]` in `NAME/agentcad.toml`
+(sheet, kerf_mm, min_feature_mm, tool_diameter_mm). `agentcad check` then runs five flat gates and `agentcad build`
+writes `build/dxf` and `build/svg`.
+
+Drawings: `agentcad drawing NAME` writes dimensioned SVG, PDF and PNG sheets to `NAME/build/drawings`. Every
+dimension is measured from the built solid; open the PNG and look at it.
+
 Full guide: `agentcad skill show`. One reference: `agentcad skill show --reference design-for-printing`
-(also `cadquery-patterns` and `verification-playbook`).
+(also `cut-parts`, `cadquery-patterns` and `verification-playbook`).
 {END}
 """
 

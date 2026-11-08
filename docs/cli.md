@@ -1,6 +1,6 @@
 # CLI reference
 
-Every command takes `--json` (except `view`) and then prints exactly one JSON document on stdout. Without it the
+Every command takes `--json` (except `view` and `mcp`) and then prints exactly one JSON document on stdout. Without it the
 output is a compact table. Logs and errors go to stderr.
 
 ## Exit codes
@@ -51,20 +51,39 @@ lid: 6888.0 mm3, print 60.0 x 40.0 x 8.0 mm, 44 triangles
 built 2 part(s) into /path/to/lid/build
 ```
 
+### Cut parts
+
+A part with `cut="laser"`, `"cnc"` or `"waterjet"` also gets its cutting profile exported, next to `step/`, `stl/` and
+`assembly/`:
+
+- `build/dxf/<part>.dxf`: R2010, millimetres, layer `CUT`; full-circle holes are `CIRCLE` entities, every other loop
+  is one closed `LWPOLYLINE`.
+- `build/svg/<part>.svg`: the same loops as paths, sized in mm.
+- A `flat` record in the part's manifest entry: `thickness_mm`, `profile_area_mm2`, `cut_length_mm`, `holes`,
+  `outline_mm`, `kerf_compensated`, `kerf_mm` and `files` (SHA-256 of the DXF and SVG). The same hashes are in the
+  part's `sha256` map, so `check --no-build` notices an edited file.
+
+From `examples/flat_panel`: `thickness_mm` 3.0, `profile_area_mm2` 23584.6531, `cut_length_mm` 794.8761, `holes` 5.
+Settings (`[flat]`, kerf compensation) and the gates are in [flat.md](flat.md).
+
 ## agentcad check
 
 ```
-agentcad check [PROJECT] [--json] [--only ID,ID] [--no-build]
+agentcad check [PROJECT] [--json] [--only ID,ID] [--no-build] [--brief]
 ```
 
 Builds the project, runs the built-in gates, then the project's own checks, and writes the report to
 `build/report.json` as well as printing it.
 
 - `--only` runs just the listed check ids. Built-in ids: `valid`, `single_solid`, `watertight`, `bed_fit`,
-  `bed_contact`, `overhang`, `min_wall`, `interference`. Project check ids are the ones passed to `ctx.expect`.
+  `bed_contact`, `overhang`, `min_wall`, `interference`, and for cut parts `flat_profile`, `sheet_fit`,
+  `min_feature`, `inner_corners`, `hole_size`. Project check ids are the ones passed to `ctx.expect`.
   An id that matches nothing is exit 2.
 - `--no-build` reuses `build/` only if the sources and every exported file still match `manifest.json`; otherwise
   it exits 2 and tells you to build.
+
+- `--brief` prints only the checks that are not PASS, a `hint` for each FAIL or WARN, and the passing checks
+  grouped by id. See below.
 
 Project checks are `checks(ctx)` and any module-level function named `check_*`; each runs in isolation, and one that
 raises becomes an ERROR check while the rest still run.
@@ -90,6 +109,27 @@ FAIL   min_wall      thin_cup           p1 0.59 mm < 1.2 mm; 95.4% of surface th
 FAIL   interference  left+right         overlap 4000.0 mm3 > 0.01
 ...
 21 pass, 0 warn, 4 fail
+```
+
+### check --brief
+
+Made for an agent that re-reads the report after every edit. With `--json` the document keeps the schema id
+`agentcad.report/1`, adds `"view": "brief"`, uses compact separators, lists only checks that are not PASS, and groups
+the passing checks by id in `passed`. Measured on `examples/broken`: 17,895 bytes in the full view, 3,144 bytes in the
+brief view; on `examples/bracket` the brief view is 588 bytes. Field details are in
+[report-schema.md](report-schema.md#brief-view). Use the full report when you need every `measured` and `limit`
+value, or the numbers of a passing check.
+
+Without `--json` it prints one row per non-PASS check, an indented `hint:` line under each one that has a hint, then
+the passing checks grouped by id and the totals line. The exit code is the same as without `--brief`.
+
+```
+$ agentcad check bad --brief
+FAIL   min_wall        thin_cup    p1 0.59 mm < 1.2 mm; 95.4% of surface thin, z 0.0..20.0
+  hint: thicken the thin walls to at least 1.2 mm (thinnest 0.59 mm, near z 0.0..20.0); lower checks.min_wall_mm only if the nozzle can print the thinner wall
+...
+42 passed: valid x5, single_solid x5, watertight x5, bed_fit x4, bed_contact x5, overhang x4, min_wall x4, interference x9, tee_head_area x1
+42 pass, 0 warn, 5 fail, 1 error
 ```
 
 ## agentcad measure
@@ -262,6 +302,99 @@ generic-300    300x300x300  nozzle 0.4 mm
 generic-350    350x350x340  nozzle 0.4 mm
 ```
 
+## agentcad drawing
+
+```
+agentcad drawing [PROJECT|FILE ...] [-o DIR] [--parts NAME,NAME] [--format svg,pdf,png]
+                 [--projection third|first] [--sheet auto|A4|A3|letter|tabloid] [--json]
+```
+
+Writes one dimensioned sheet per part: front, top, right and isometric views, overall sizes, hole callouts and
+positions, and a title block. Every dimension is read from the built solid. The input is a project folder (default
+`.`) or STEP files; meshes are refused with exit 2 because they have no edges. Output goes to
+`PROJECT/build/drawings`, `./drawings` for STEP files, or `-o DIR`, as `<part>.svg`, `.pdf` and `.png`. An unknown
+`--parts` name exits 2 and lists the valid names; `--json` prints `agentcad.drawing/1` with the scale, sheet, views
+and every dimension (`id`, `view`, `kind`, `role`, `value_mm`, `text`) so numbers can be checked without reading the
+image. Layout, scale rules and the JSON shape are in [drawings.md](drawings.md).
+
+```
+$ agentcad drawing flat_panel --format svg,png
+/path/to/flat_panel/build/drawings/panel.svg
+/path/to/flat_panel/build/drawings/panel.png
+/path/to/flat_panel/build/drawings/bracket.svg
+/path/to/flat_panel/build/drawings/bracket.png
+```
+
+## agentcad api
+
+```
+agentcad api [--json]
+```
+
+Prints everything an agent would otherwise guess, from the code itself: every command with its flags, the
+`CheckContext` methods and signatures, the `agentcad.toml` keys with defaults (including `[flat]`), every gate id,
+the printer profiles, the templates, the three frames and the report fields. The text form is a cheat sheet of about
+6 KB; `--json` prints the same as `agentcad.api/1` (about 12 KB) with the keys `commands`, `exit_codes`, `model`,
+`context`, `config`, `gates`, `printers`, `templates`, `frames` and `report`.
+
+```
+$ agentcad api
+# agentcad API cheat sheet
+*agentcad 0.2.0, schema agentcad.api/1*
+...
+```
+
+## agentcad skill
+
+```
+agentcad skill {install|show|path} [--host claude|codex|cursor|agents-md] [--project DIR] [--link] [--force]
+               [--reference NAME] [--json]
+```
+
+Puts the agent skill where an agent will read it, or prints it. The skill ships inside the package, so this works
+from a plain `uv tool install`.
+
+**install** copies the skill for `--host` (default `claude`) and prints where it went; `--json` prints
+`agentcad.skill/1` with `action`, `host`, `dest`, `status` (`installed`, `updated` or `unchanged`) and `files`.
+Running it again is a no-op when the copy is current.
+
+| Host | What it writes | Where |
+|---|---|---|
+| `claude` | `SKILL.md` and `references/` | `~/.claude/skills/agentcad`; with `--project DIR`, `DIR/.claude/skills/agentcad` |
+| `codex` | `SKILL.md` and `references/` | `$CODEX_HOME/skills/agentcad`, default `~/.codex/skills/agentcad`. User-wide: `--project` and `--link` are refused (exit 2) |
+| `cursor` | `agentcad.mdc` rule and the references | `.cursor/rules/` in `--project`, default the current folder. `--link` is refused |
+| `agents-md` | a condensed guide between `<!-- agentcad:begin -->` and `<!-- agentcad:end -->` | `AGENTS.md` in `--project`, default the current folder; text outside the markers is left alone. `--link` is refused |
+
+- `--link` (claude only) makes the destination a symlink to the installed skill, so it follows upgrades.
+- A destination that exists and differs is refused with exit 2 unless `--force`. `--force` only replaces a folder
+  that has a `SKILL.md`, so it cannot delete an unrelated directory.
+- Symlink guard: when `--project` is given, an install refuses (exit 2) to write through a symlink inside that
+  project, such as a `.claude` link planted by a hostile repository.
+
+**show** prints `SKILL.md`, or one reference file with `--reference NAME` (`cadquery-patterns`, `cut-parts`,
+`design-for-printing`, `verification-playbook`); an unknown name exits 2 and lists the choices. `--json` wraps the
+text in `agentcad.skill/1` with `path` and `content`.
+
+**path** prints the folder that holds the skill, for linking by hand.
+
+```
+$ agentcad skill install --project demo
+installed agentcad skill for claude: /path/to/demo/.claude/skills/agentcad
+$ agentcad skill install --project demo
+already up to date: /path/to/demo/.claude/skills/agentcad
+```
+
+## agentcad mcp
+
+```
+agentcad mcp [--root DIR]
+```
+
+Runs an MCP server on stdio so an agent can call agentcad as tools without shelling out. It needs the `mcp` extra
+(`uv tool install 'agentcad[mcp] @ git+https://github.com/AryaVora621/agentcad'`). `--root DIR` refuses paths outside
+that folder. Register it with `claude mcp add agentcad -- agentcad mcp`. The tools mirror the commands above; the
+list, arguments and behaviour are in [mcp.md](mcp.md).
+
 ## agentcad doctor
 
 ```
@@ -274,7 +407,7 @@ if write access or the printer file fails; a missing render stack is a WARN.
 ```
 $ agentcad doctor
 PASS   python        -     Python 3.12.13 on Darwin
-PASS   agentcad      -     agentcad 0.1.0
+PASS   agentcad      -     agentcad 0.2.0
 PASS   cadquery      -     CadQuery 2.8.0, trimesh 5.2.0
 PASS   offscreen     -     VTK 9.6.2 offscreen OK
 PASS   write_access  -     can write to /path/to/folder
