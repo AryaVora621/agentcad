@@ -182,3 +182,72 @@ def test_builtin_ids_are_documented_in_the_gate_table():
 def test_report_meta_names_the_tools_and_printer(broken_report):
     assert broken_report.meta["printer"] == "generic-220" and broken_report.meta["elapsed_s"] >= 0
     assert broken_report.meta["cadquery"] and broken_report.meta["agentcad"]
+
+
+# -- fix hints ---------------------------------------------------------------------------------------------------
+
+def hint_of(report, id, part=None):
+    check = by_id(report, id, part)[0]
+    assert check.status in (Status.FAIL, Status.WARN)
+    return check.hint
+
+
+def test_broken_failures_carry_a_hint_that_uses_the_measurements(broken_report):
+    bed = hint_of(broken_report, "bed_fit", "long_bar")
+    assert "84.0 mm too long in X" in bed and "generic-220 (220 x 220 x 250)" in bed and "Part.print" in bed
+    assert "[printer]" in bed
+    overhang = hint_of(broken_report, "overhang", "tee")
+    assert "Part.print" in overhang and "where[0]" in overhang and "45 degree chamfer" in overhang
+    assert "300 mm2 at z 25.0" in overhang
+    overlap = hint_of(broken_report, "interference", "left+right")
+    assert "Part.use" in overlap and "(5.0, 0.0, 10.0)" in overlap and "checks.allow_overlap" in overlap
+    wall = hint_of(broken_report, "min_wall", "thin_cup")
+    assert "1.2 mm" in wall and "0.59 mm" in wall
+    # Loosening a limit is never the opening move.
+    for text in (overhang, wall):
+        assert ("raise checks" in text or "lower checks" in text) and not text.startswith(("raise", "lower"))
+    assert all(len(h) < 260 for h in (bed, overhang, overlap, wall))
+
+
+def test_passing_checks_never_carry_a_hint(copy_example, broken_report):
+    report = check_project(copy_example("box_with_lid"))
+    assert all(c.hint is None for c in report.checks)
+    assert all(c.hint is None for c in broken_report.checks if c.status is Status.PASS)
+
+
+def test_single_solid_warn_has_a_hint(make_project):
+    shape = "cq.Workplane('XY').pushPoints([(0, 0), (30, 0)]).box(10, 10, 10)"
+    report = check_project(make_project(one_part(shape)), only=["single_solid"])
+    assert "2 islands" in report.checks[0].hint and "Part" in report.checks[0].hint
+
+
+def test_bed_fit_hint_offers_the_diagonal_only_when_it_fits(make_project):
+    toml = "[printer]\nbed = [220, 220, 250]\n"
+    near = check_project(make_project(one_part(BOX.format(226, 10, 5)), toml), only=["bed_fit"]).checks[0]
+    assert near.status is Status.FAIL and "rz=45" in near.hint and "10.0 mm too long in X" in near.hint
+    tall = check_project(make_project(one_part(BOX.format(10, 10, 300)), toml), only=["bed_fit"]).checks[0]
+    assert "50.0 mm too tall in Z" in tall.hint and "rx=90" in tall.hint and "rz=45" not in tall.hint
+
+
+def test_valid_watertight_and_bed_contact_hints():
+    assert "0 solid" in gates._valid("face", cq.Face.makePlane(10, 10)).hint
+    mesh = trimesh.creation.box((10, 10, 10))
+    mesh.update_faces(list(range(len(mesh.faces) - 1)))
+    assert "zero-thickness" in gates._watertight("p", mesh).hint
+    assert gates._watertight("p", trimesh.creation.box((10, 10, 10))).hint is None
+
+
+def test_bed_contact_warn_hint(make_project):
+    check = check_project(make_project(one_part("cq.Workplane('XY').sphere(10)")), only=["bed_contact"]).checks[0]
+    assert check.status is Status.WARN and "flat face" in check.hint
+    assert check_project(make_project(one_part(BOX.format(20, 20, 20))), only=["bed_contact"]).checks[0].hint is None
+
+
+def test_expect_hint_is_kept_on_fail_and_dropped_on_pass(make_project):
+    model = one_part(BOX.format(10, 10, 10)) + (
+        "\ndef checks(ctx):\n    ctx.expect('bad', 5.0, min=6, hint='make it bigger')\n"
+        "    ctx.expect('good', 7.0, min=6, hint='make it bigger')\n    ctx.expect('plain', 5.0, min=6)\n")
+    bad, good, plain = check_project(make_project(model), only=["bad", "good", "plain"]).checks
+    assert bad.status is Status.FAIL and bad.hint == "make it bigger"
+    assert good.status is Status.PASS and good.hint is None
+    assert plain.hint is None

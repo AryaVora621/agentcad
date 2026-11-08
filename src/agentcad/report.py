@@ -90,7 +90,7 @@ class Report:
     def to_json(self, view: str = "full") -> str:
         """Serialise as one JSON document; view "brief" is the token-lean form for agents."""
         if view == "brief":
-            raise NotImplementedError("brief view lands with the lean-output work")
+            return self._brief_json()
         if view != "full":
             raise ValueError(f"unknown report view {view!r}; use 'full' or 'brief'")
         document = {"schema": SCHEMA, "tool": self.tool, "project": self.project, "status": self.status(),
@@ -98,9 +98,49 @@ class Report:
                     "checks": [c.to_dict() for c in self.checks], "meta": self.meta}
         return json.dumps(json_value(document), indent=2, allow_nan=False)
 
+    def _brief_json(self) -> str:
+        """Non-PASS checks in full, PASS checks folded into ``passed`` by id, compact separators.
+
+        Agents re-read this after every edit, so the passing rows (most of a healthy report) cost one short
+        name each instead of a whole object.
+        """
+        attention = []
+        for c in self.checks:
+            if c.status is Status.PASS:
+                continue
+            entry = c.to_dict()
+            for key in ("measured", "limit", "where"):
+                if not entry[key]:
+                    del entry[key]
+            attention.append(entry)
+        passed: dict[str, list[str]] = {}
+        for c in self.checks:
+            if c.status is Status.PASS:
+                passed.setdefault(c.id, []).append(c.part or "-")
+        meta = {k: self.meta[k] for k in ("elapsed_s", "build") if k in self.meta}
+        document = {"schema": SCHEMA, "view": "brief", "tool": self.tool, "project": self.project,
+                    "status": self.status(), "exit_code": self.exit_code(), "counts": self.counts(),
+                    "checks": attention, "passed": passed, "meta": meta}
+        return json.dumps(json_value(document), separators=(",", ":"), allow_nan=False)
+
     def to_brief_table(self) -> str:
-        """Only the checks that need attention, with hints, then the totals line."""
-        raise NotImplementedError("brief table lands with the lean-output work")
+        """Only the checks that need attention, with hints, then a passed summary and the totals line."""
+        attention = [c for c in self.checks if c.status is not Status.PASS]
+        width = max([len(c.id) for c in attention] + [2])
+        part_width = max([len(c.part or "-") for c in attention] + [4])
+        lines: list[str] = []
+        for c in attention:
+            lines.append(f"{c.status.value:<5}  {c.id:<{width}}  {c.part or '-':<{part_width}}  {c.summary}")
+            if c.hint:
+                lines.append(f"  hint: {c.hint}")
+        counts: dict[str, int] = {}
+        for c in self.checks:
+            if c.status is Status.PASS:
+                counts[c.id] = counts.get(c.id, 0) + 1
+        if counts:
+            lines.append(f"{sum(counts.values())} passed: " + ", ".join(f"{k} x{v}" for k, v in counts.items()))
+        lines.append(self.to_table().splitlines()[-1])
+        return "\n".join(lines)
 
     def to_table(self) -> str:
         """One line per check, then a totals line."""

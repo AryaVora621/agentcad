@@ -30,6 +30,7 @@ Each check:
 | `measured` | object | numbers with unit-suffixed keys (`area_mm2`, `value_mm`) |
 | `limit` | object | the thresholds used (`max_area_mm2`, `min_mm`) |
 | `where` | array | up to five worst locations: `centroid_mm`, `area_mm2` or `volume_mm3`, `z_mm` |
+| `hint` | string, optional | how to fix it; present only on a FAIL or WARN that knows a fix (every built-in gate does, and `ctx.expect(..., hint=...)` on a failure), at most about 220 characters, naming the numbers and the `Part` or config field to change |
 
 ERROR means the check itself could not run (the project check raised, a gate hit an exception, or the model failed
 to build). It carries no `measured` values.
@@ -76,7 +77,24 @@ Example, from `agentcad check examples/bracket --json` with the checks trimmed t
 }
 ```
 
-A failing check from `examples/broken`, with its location:
+### Brief view
+
+`check --json --brief` prints the same schema id with an extra `"view": "brief"` and compact separators, for
+agents that re-read the report after every edit. The full view is unchanged (no `view` or `passed` key).
+
+| Field | Meaning |
+|---|---|
+| `view` | `"brief"` (absent in the full view) |
+| `schema`, `tool`, `project`, `status`, `exit_code`, `counts` | as in the full view |
+| `checks` | only checks that are not PASS (FAIL, ERROR, WARN, SKIP); `measured`, `limit` and `where` are left out when empty |
+| `passed` | the passing checks grouped by id: `{"valid": ["left", "right"], "interference": ["left+right"]}`; `"-"` stands for a check with no part |
+| `meta` | only `elapsed_s` and `build` |
+
+`examples/broken` is about 18 KB in the full view and about 3 KB in the brief view; an all-pass project such as
+`examples/bracket` is under 1 KB. `check --brief` without `--json` prints one row per non-PASS check with an
+indented `  hint:` line under each one that has a hint, then `N passed: valid x6, overhang x3, ...` and the totals line.
+
+A failing check from `examples/broken`, with its location and fix hint:
 
 ```json
 {
@@ -86,7 +104,8 @@ A failing check from `examples/broken`, with its location:
   "summary": "300.0 mm2 unsupported > 25 allowed; worst 300.0 mm2 at z 25.0..25.0",
   "measured": {"area_mm2": 300.0, "regions": 1},
   "limit": {"max_area_mm2": 25, "max_overhang_deg": 45},
-  "where": [{"centroid_mm": [0.0, 0.0, 25.0], "area_mm2": 300.0, "z_mm": [25.0, 25.0]}]
+  "where": [{"centroid_mm": [0.0, 0.0, 25.0], "area_mm2": 300.0, "z_mm": [25.0, 25.0]}],
+  "hint": "rotate it in Part.print so a large flat face sits on the bed, or turn the worst face (where[0], 300 mm2 at z 25.0) into a 45 degree chamfer; raise checks.overhang_allow_mm2 only if supports are acceptable"
 }
 ```
 

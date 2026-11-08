@@ -87,8 +87,12 @@ class CheckContext:
                             self.project.checks["interference_tol_mm3"])
 
     def expect(self, id: str, value: float, *, min: float | None = None, max: float | None = None,
-               part: str | None = None, unit: str = "mm", summary: str | None = None) -> Check:
-        """Record PASS when ``min <= value <= max`` and FAIL otherwise. At least one bound is required."""
+               part: str | None = None, unit: str = "mm", summary: str | None = None,
+               hint: str | None = None) -> Check:
+        """Record PASS when ``min <= value <= max`` and FAIL otherwise. At least one bound is required.
+
+        ``hint`` says how to fix a failure; it is only attached when the check fails.
+        """
         if min is None and max is None:
             raise ValueError(f"expect({id!r}): give min, max or both")
         if value is None:
@@ -99,7 +103,7 @@ class CheckContext:
         text = " and ".join(f"{key} {bound:g}" for key, bound in (("min", min), ("max", max)) if bound is not None)
         return self.record(Check(id, part, Status.PASS if ok else Status.FAIL,
                                  summary or f"{value:.4g} {unit} ({'within' if ok else 'outside'} {text})",
-                                 {f"value_{unit}": value}, limit))
+                                 {f"value_{unit}": value}, limit, hint=None if ok else hint))
 
     def record(self, check: Check) -> Check:
         """Add a hand-built Check to the report."""
@@ -190,7 +194,9 @@ def _valid(name: str, shape: cq.Shape) -> Check:
     if is_valid(shape):
         return Check("valid", name, Status.PASS, f"valid solid, {vol:.1f} mm3", measured)
     return Check("valid", name, Status.FAIL, f"not a valid positive-volume solid (solids {solids}, volume {vol:.1f} mm3)",
-                 measured, {"min_volume_mm3": 0})
+                 measured, {"min_volume_mm3": 0},
+                 hint=(f"the shape has {solids} solid(s) and {vol:.1f} mm3: look for a boolean (cut, intersect, shell, "
+                       "fillet) that emptied it or left an open shell, and build the part from closed solids"))
 
 
 def _single_solid(name: str, shape: cq.Shape) -> Check:
@@ -198,7 +204,9 @@ def _single_solid(name: str, shape: cq.Shape) -> Check:
     if n <= 1:
         return Check("single_solid", name, Status.PASS, "one solid", {"solids": n})
     return Check("single_solid", name, Status.WARN, f"{n} disconnected solids; one print, or split into parts?",
-                 {"solids": n}, {"max_solids": 1})
+                 {"solids": n}, {"max_solids": 1},
+                 hint=(f"join the {n} islands with a bridging feature (union a rib or plate) if it is one print, "
+                       "or declare each island as its own Part"))
 
 
 def _watertight(name: str, mesh) -> Check:
@@ -207,7 +215,9 @@ def _watertight(name: str, mesh) -> Check:
     if tight and consistent:
         return Check("watertight", name, Status.PASS, f"watertight, {len(mesh.faces)} triangles", measured)
     reason = "has open edges" if not tight else "has inconsistent winding"
-    return Check("watertight", name, Status.FAIL, f"print STL {reason}; slicers may repair or reject it", measured)
+    return Check("watertight", name, Status.FAIL, f"print STL {reason}; slicers may repair or reject it", measured,
+                 hint=("remove zero-thickness faces, sliver cuts and coincident faces from the model "
+                       "(offset a cut by 0.01 mm past the surface) so the print STL closes"))
 
 
 def _bed_fit(name: str, mesh, printer) -> Check:
@@ -221,7 +231,30 @@ def _bed_fit(name: str, mesh, printer) -> Check:
                      fit, limit)
     return Check("bed_fit", name, Status.FAIL,
                  f"{x:.1f} x {y:.1f} x {z:.1f} mm does not fit {printer.name} {bed} with {fit['margin_mm']:g} mm margin",
-                 fit, limit)
+                 fit, limit, hint=_bed_fit_hint(fit["size_mm"], printer, fit["margin_mm"]))
+
+
+def _bed_fit_hint(size: list[float], printer, margin: float) -> str:
+    """Name the worst overshoot and the cheapest fixes, assuming the part is placed in its better XY orientation."""
+    x, y, z = size
+    bx, by, bz = printer.bed_xyz
+    bed = " x ".join(f"{v:g}" for v in printer.bed_xyz)
+    ax, ay = bx - 2 * margin, by - 2 * margin
+    direct, swapped = (x - ax, y - ay), (y - ax, x - ay)
+    over_x, over_y = min(direct, swapped, key=max)
+    axes = sorted([(over_x, "long", "X"), (over_y, "long", "Y"), (z - bz, "tall", "Z")], reverse=True)
+    amount, word, axis = axes[0]
+    options = []
+    if axes[0][2] == "Z":
+        options.append("lay it on its side with Part.print (rx=90 or ry=90)")
+    else:
+        # A part turned 45 degrees spans (x + y) / sqrt(2) on both axes; only offer it when that actually fits.
+        if (x + y) / 2 ** 0.5 <= min(ax, ay) and z <= bz:
+            options.append("rotate it in Part.print (rz=45 reaches the bed diagonal)")
+        else:
+            options.append("rotate it in Part.print (rz) to use the bed diagonal or lay it on its side (rx/ry=90)")
+    options += ["split it into parts", "or set [printer] to the real machine"]
+    return f"{amount:.1f} mm too {word} in {axis} for {printer.name} ({bed}): " + ", ".join(options)
 
 
 def _bed_contact(name: str, mesh) -> Check:
@@ -234,7 +267,9 @@ def _bed_contact(name: str, mesh) -> Check:
     if share < MIN_CONTACT_SHARE or contact < MIN_CONTACT_MM2:
         return Check("bed_contact", name, Status.WARN,
                      f"only {contact:.1f} mm2 on the bed ({100 * share:.1f}% of footprint); may tip or detach",
-                     measured, limit)
+                     measured, limit,
+                     hint=(f"rotate it in Part.print so a large flat face sits on the bed (now {contact:.1f} mm2), "
+                           "or add a flat base plate or a brim-sized foot to the model"))
     return Check("bed_contact", name, Status.PASS, f"{contact:.1f} mm2 on the bed ({100 * share:.0f}% of footprint)",
                  measured, limit)
 
@@ -255,7 +290,11 @@ def _overhang(name: str, mesh, cfg: dict) -> Check:
     worst = where[0]
     return Check("overhang", name, Status.FAIL,
                  f"{result['area_mm2']:.1f} mm2 unsupported > {allow:g} allowed; worst {worst['area_mm2']:.1f} mm2 at "
-                 f"z {worst['z_mm'][0]:.1f}..{worst['z_mm'][1]:.1f}", measured, limit, where)
+                 f"z {worst['z_mm'][0]:.1f}..{worst['z_mm'][1]:.1f}", measured, limit, where,
+                 hint=("rotate it in Part.print so a large flat face sits on the bed, or turn the worst face "
+                       f"(where[0], {worst['area_mm2']:.0f} mm2 at z {worst['z_mm'][0]:.1f}) into a "
+                       f"{cfg['max_overhang_deg']:g} degree chamfer; raise checks.overhang_allow_mm2 only if "
+                       "supports are acceptable"))
 
 
 def _min_wall(name: str, mesh, cfg: dict) -> Check:
@@ -271,7 +310,10 @@ def _min_wall(name: str, mesh, cfg: dict) -> Check:
     z = result["thin_z_mm"]
     return Check("min_wall", name, Status.FAIL,
                  f"p1 {result['p1_mm']:.2f} mm < {limit_mm:g} mm; {100 * result['thin_share']:.1f}% of surface thin"
-                 + (f", z {z[0]:.1f}..{z[1]:.1f}" if z else ""), measured, {"min_wall_mm": limit_mm}, where)
+                 + (f", z {z[0]:.1f}..{z[1]:.1f}" if z else ""), measured, {"min_wall_mm": limit_mm}, where,
+                 hint=(f"thicken the thin walls to at least {limit_mm:g} mm (thinnest {result['min_mm']:.2f} mm"
+                       + (f", near z {z[0]:.1f}..{z[1]:.1f}" if z else "")
+                       + "); lower checks.min_wall_mm only if the nozzle can print the thinner wall"))
 
 
 def _interference(a: str, b: str, shape_a: cq.Shape, shape_b: cq.Shape, tol: float, allowed: bool) -> Check:
@@ -285,4 +327,6 @@ def _interference(a: str, b: str, shape_a: cq.Shape, shape_b: cq.Shape, tol: flo
         return Check("interference", pair, Status.PASS, f"overlap {overlap:.1f} mm3 (listed in allow_overlap)",
                      measured, limit)
     where = [{"centroid_mm": detail["centroid_mm"], "volume_mm3": overlap, "bbox_mm": detail["bbox"]}]
-    return Check("interference", pair, Status.FAIL, f"overlap {overlap:.1f} mm3 > {tol:g}", measured, limit, where)
+    return Check("interference", pair, Status.FAIL, f"overlap {overlap:.1f} mm3 > {tol:g}", measured, limit, where,
+                 hint=(f"move one part with Part.use or add clearance near where[0] ({', '.join(f'{v:.1f}' for v in detail['centroid_mm'])}); "
+                       "if this is a designed press fit, list the pair in checks.allow_overlap"))
