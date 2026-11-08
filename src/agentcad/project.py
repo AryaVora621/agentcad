@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from types import ModuleType
 
-from .model import Part
+from .model import CutProcessError, Part
 from .printers import Printer, get_printer
 
 
@@ -26,8 +26,12 @@ class BuildError(RuntimeError):
 DEFAULT_CHECKS: dict = {"max_overhang_deg": 45, "overhang_allow_mm2": 25, "min_wall_mm": 0,
                         "interference_tol_mm3": 0.01, "first_layer_mm": 0.3, "allow_overlap": []}
 DEFAULT_EXPORT: dict = {"tolerance": 0.02, "angular_tolerance": 0.05}
+# Sheet size and cutter limits for laser, CNC router and waterjet parts (see docs/flat.md).
+DEFAULT_FLAT: dict = {"sheet": [600, 400], "kerf_mm": 0.15, "min_feature_mm": 1.0, "tool_diameter_mm": 3.175,
+                      "min_hole_ratio": 1.0, "compensate_kerf": False}
 ALLOWED_KEYS: dict[str, set[str]] = {"project": {"name", "module"}, "printer": {"profile", "bed"},
-                                     "export": set(DEFAULT_EXPORT), "checks": set(DEFAULT_CHECKS)}
+                                     "export": set(DEFAULT_EXPORT), "checks": set(DEFAULT_CHECKS),
+                                     "flat": set(DEFAULT_FLAT)}
 
 
 @dataclass
@@ -42,6 +46,7 @@ class Project:
     export: dict
     checks: dict
     config_path: Path
+    flat: dict = field(default_factory=lambda: {**DEFAULT_FLAT})
 
     @classmethod
     def load(cls, path: str | Path = ".") -> Project:
@@ -56,6 +61,8 @@ class Project:
         export = {**DEFAULT_EXPORT, **data.get("export", {})}
         checks = {**DEFAULT_CHECKS, **data.get("checks", {})}
         _validate_numbers(export, checks)
+        flat = {**DEFAULT_FLAT, **data.get("flat", {})}
+        _validate_flat(flat)
         printer = _resolve_printer(data.get("printer", {}))
         module, parts = _import_model(module_file, root)
         for pair in checks["allow_overlap"]:
@@ -63,7 +70,7 @@ class Project:
             if missing:
                 raise ConfigError(f"checks.allow_overlap names unknown part {missing[0]!r}")
         return cls(root, data["project"].get("name", root.name), {p.name: p for p in parts}, module, printer,
-                   export, checks, config_path)
+                   export, checks, config_path, flat)
 
     @contextmanager
     def on_path(self) -> Iterator[None]:
@@ -124,6 +131,19 @@ def _validate_numbers(export: dict, checks: dict) -> None:
         raise ConfigError("checks.allow_overlap must be a list of [part, part] pairs")
 
 
+def _validate_flat(flat: dict) -> None:
+    sheet = flat["sheet"]
+    if not isinstance(sheet, list) or len(sheet) != 2 or not all(
+            isinstance(v, (int, float)) and not isinstance(v, bool) and v > 0 for v in sheet):
+        raise ConfigError("flat.sheet must be two positive numbers [width, height] in mm")
+    for key in ("kerf_mm", "min_feature_mm", "tool_diameter_mm", "min_hole_ratio"):
+        value = flat[key]
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or value < 0:
+            raise ConfigError(f"flat.{key} must be a non-negative number, got {value!r}")
+    if not isinstance(flat["compensate_kerf"], bool):
+        raise ConfigError(f"flat.compensate_kerf must be true or false, got {flat['compensate_kerf']!r}")
+
+
 def _resolve_printer(section: dict) -> Printer:
     try:
         printer = get_printer(section.get("profile", "generic-220"))
@@ -153,8 +173,10 @@ def _import_model(module_file: Path, root: Path) -> tuple[ModuleType, list[Part]
         if not callable(getattr(module, "parts", None)):
             raise BuildError(f"{module_file.name} must define parts() returning a list of Part")
         parts = list(module.parts())
-    except BuildError:
+    except (BuildError, ConfigError):
         raise
+    except CutProcessError as exc:
+        raise ConfigError(str(exc)) from exc
     except Exception as exc:
         raise BuildError(f"{module_file.name}: {type(exc).__name__}: {exc}") from exc
     finally:

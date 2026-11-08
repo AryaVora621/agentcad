@@ -137,3 +137,38 @@ def test_existing_build_detects_tampered_files(make_project):
 def test_existing_build_without_a_build(make_project):
     with pytest.raises(ConfigError, match="No fresh build"):
         existing_build(Project.load(make_project(CUBE)))
+
+
+FLAT = '''
+import cadquery as cq
+from agentcad import Part
+
+def parts():
+    plate = cq.Workplane("XY").box(40, 30, 3, centered=(True, True, False)).faces(">Z").workplane().hole(6)
+    return [Part("plate", plate, cut="laser"), Part("block", cq.Workplane("XY").box(10, 10, 10))]
+'''
+
+
+def test_cut_parts_get_dxf_svg_and_a_flat_record_while_stl_and_step_stay(make_project):
+    folder = make_project(FLAT)
+    result = build(folder)
+    for name in ("step/plate.step", "stl/plate.stl", "assembly/plate.stl", "dxf/plate.dxf", "svg/plate.svg"):
+        assert (folder / "build" / name).is_file(), name
+    assert not (folder / "build" / "dxf" / "block.dxf").exists()
+    plate, block = result.manifest["parts"]
+    assert "flat" not in block and "cut" not in block
+    assert plate["cut"] == "laser" and plate["flat"]["holes"] == 1
+    for name, digest in plate["flat"]["files"].items():
+        assert plate["sha256"][name] == digest == sha256(folder / "build" / name)
+
+
+def test_a_failed_build_keeps_the_old_flat_outputs(make_project):
+    folder = make_project(FLAT)
+    build(folder)
+    before = tree(folder / "build" / "dxf")
+    (folder / "agentcad.toml").write_text((folder / "agentcad.toml").read_text()
+                                          + "[flat]\nkerf_mm = 9\ncompensate_kerf = true\n")
+    with pytest.raises(BuildError, match="collapses"):
+        build(folder)
+    assert tree(folder / "build" / "dxf") == before
+    assert not list((folder / "build").glob(".tmp-*"))

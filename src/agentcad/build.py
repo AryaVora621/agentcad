@@ -13,13 +13,14 @@ import cadquery as cq
 import trimesh
 
 from . import __version__
+from .flat import export_profile
 from .geometry import area, bbox, center_of_mass, is_valid, solids_count, volume
 from .project import BuildError, BuildResult, ConfigError, Project
 from .report import json_value
 
 MANIFEST_SCHEMA = "agentcad.manifest/1"
 # Entries a build owns; anything else in the folder (renders, report.json) is left alone.
-_OWNED = ("step", "stl", "assembly", "assembly.step", "manifest.json")
+_OWNED = ("step", "stl", "assembly", "dxf", "svg", "assembly.step", "manifest.json")
 
 
 def sha256(path: Path) -> str:
@@ -61,7 +62,9 @@ def build(project: Project | str | Path = ".", out: str | Path | None = None) ->
         (staging / "manifest.json").write_text(json.dumps(json_value(manifest), indent=2) + "\n")
         for name in _OWNED:
             _discard(target / name)
-            os.replace(staging / name, target / name)
+            # dxf/ and svg/ exist only while the project has cut parts; a stale folder is removed above.
+            if (staging / name).exists():
+                os.replace(staging / name, target / name)
     except BuildError:
         raise
     except Exception as exc:
@@ -91,15 +94,33 @@ def _export_parts(project: Project, staging: Path) -> tuple[dict, list[dict]]:
             cq.exporters.export(frames[frame], str(staging / relative), tolerance=project.export["tolerance"],
                                 angularTolerance=project.export["angular_tolerance"])
             files[relative] = sha256(staging / relative)
+        flat = _export_flat(project, part, frames["print"], staging, files) if part.cut else None
         mesh = trimesh.load(str(staging / "stl" / f"{part.name}.stl"), force="mesh")
         meshes[part.name] = mesh
         model = frames["model"]
-        records.append({"name": part.name, "qty": part.qty, "printed": part.printed, "material": part.material,
+        # A cut part is a plate for a laser or router, so it never counts as printed in the manifest.
+        records.append({"name": part.name, "qty": part.qty, "printed": part.printed and part.cut is None,
+                        "material": part.material,
                         "color": part.color, "volume_mm3": volume(model), "area_mm2": area(model),
                         "bbox": {frame: bbox(shape) for frame, shape in frames.items()},
                         "center_of_mass_mm": center_of_mass(frames["use"]), "solids": solids_count(model),
-                        "valid": is_valid(model), "triangles": len(mesh.faces), "sha256": files})
+                        "valid": is_valid(model), "triangles": len(mesh.faces), "sha256": files,
+                        **({"cut": part.cut, "flat": flat} if flat else {})})
     return meshes, records
+
+
+def _export_flat(project: Project, part, solid: cq.Shape, staging: Path, files: dict) -> dict:
+    """Write the part's DXF and SVG profile, hash them into ``files`` and return its manifest record."""
+    for folder in ("dxf", "svg"):
+        (staging / folder).mkdir(exist_ok=True)
+    dxf, svg = f"dxf/{part.name}.dxf", f"svg/{part.name}.svg"
+    try:
+        record = export_profile(solid, project.flat, staging / dxf, staging / svg)
+    except ValueError as exc:
+        raise BuildError(f"Part {part.name}: {exc}") from exc
+    hashes = {dxf: sha256(staging / dxf), svg: sha256(staging / svg)}
+    files.update(hashes)
+    return {**record, "files": hashes}
 
 
 def existing_build(project: Project) -> BuildResult:

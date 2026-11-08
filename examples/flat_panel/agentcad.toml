@@ -1,0 +1,13 @@
+[project]
+name = "flat-panel"
+module = "model.py"
+
+[printer]
+profile = "generic-220"
+
+[flat]
+sheet = [600, 400]
+kerf_mm = 0.15
+min_feature_mm = 1.0
+min_hole_ratio = 1.0
+compensate_kerf = true

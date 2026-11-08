@@ -106,3 +106,33 @@ def test_each_load_gets_a_fresh_namespace(make_project):
                           "    from agentcad import Part\n    return [Part('c', cq.Workplane('XY').box(1, 1, 1))]\n")
     first, second = Project.load(folder), Project.load(folder)
     assert first.module is not second.module and first.module.COUNT == [1] == second.module.COUNT
+
+
+def test_flat_section_defaults_and_overrides(make_project):
+    from agentcad.project import DEFAULT_FLAT
+
+    assert Project.load(make_project(MODEL)).flat == DEFAULT_FLAT
+    loaded = Project.load(make_project(MODEL, "[flat]\nsheet = [300, 200]\nkerf_mm = 0.2\ncompensate_kerf = true\n")).flat
+    assert loaded["sheet"] == [300, 200] and loaded["kerf_mm"] == 0.2 and loaded["compensate_kerf"] is True
+    assert loaded["tool_diameter_mm"] == DEFAULT_FLAT["tool_diameter_mm"]
+    assert DEFAULT_FLAT["sheet"] == [600, 400]  # not mutated by the override above
+
+
+@pytest.mark.parametrize("toml, message", [
+    ("[flat]\nbogus = 1\n", "flat.bogus"),
+    ("[flat]\nsheet = [600, 0]\n", "flat.sheet"),
+    ("[flat]\nsheet = 600\n", "flat.sheet"),
+    ("[flat]\ntool_diameter_mm = true\n", "flat.tool_diameter_mm"),
+    ("[flat]\nmin_feature_mm = -1\n", "flat.min_feature_mm"),
+    ("[flat]\ncompensate_kerf = \"yes\"\n", "flat.compensate_kerf"),
+])
+def test_bad_flat_config_is_a_config_error(make_project, toml, message):
+    with pytest.raises(ConfigError, match=message):
+        Project.load(make_project(MODEL, toml))
+
+
+def test_a_bad_cut_value_is_a_config_error_not_a_build_error(make_project):
+    source = ("import cadquery as cq\nfrom agentcad import Part\ndef parts():\n"
+              "    return [Part('p', cq.Workplane('XY').box(5, 5, 1), cut='plasma')]\n")
+    with pytest.raises(ConfigError, match="cut must be"):
+        Project.load(make_project(source))

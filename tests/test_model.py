@@ -93,3 +93,13 @@ def test_public_api_is_importable_from_the_package():
 
     for name in ("Part", "Pose", "Project", "Check", "Report", "Status", "CheckContext", "__version__"):
         assert hasattr(agentcad, name)
+
+
+def test_cut_is_one_of_the_three_processes_or_none():
+    assert Part("a", offset_slab()).cut is None
+    for process in ("laser", "cnc", "waterjet"):
+        assert Part("a", offset_slab(), cut=process).cut == process
+    with pytest.raises(ValueError, match="cut must be 'laser', 'cnc', 'waterjet'"):
+        Part("a", offset_slab(), cut="plasma")
+    with pytest.raises(ValueError, match="cut must be"):
+        Part("a", offset_slab(), cut="")

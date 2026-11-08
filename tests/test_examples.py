@@ -31,3 +31,22 @@ def test_sources_contain_no_em_dashes():
         if path.name in ("render.py", "getting-started.md"):
             continue
         assert "—" not in path.read_text(), path
+
+
+# Examples that must check clean, with the exit code `agentcad check` is expected to return.
+CHECKED_EXAMPLES = [("flat_panel", 0)]
+
+
+@pytest.mark.parametrize("example, expected_exit", CHECKED_EXAMPLES)
+def test_checked_examples_exit_with_the_expected_code(example, expected_exit, cli, copy_example):
+    folder = copy_example(example)
+    code, _, err = cli("check", folder)
+    assert code == expected_exit, err
+
+
+def test_flat_panel_exports_a_dxf_and_svg_for_the_laser_part(cli, copy_example):
+    folder = copy_example("flat_panel")
+    assert cli("build", folder)[0] == 0
+    assert (folder / "build" / "dxf" / "panel.dxf").is_file()
+    assert (folder / "build" / "svg" / "panel.svg").is_file()
+    assert not (folder / "build" / "dxf" / "bracket.dxf").exists()

@@ -28,6 +28,8 @@ dependencies = [
   "scipy",
   "manifold3d",
   "matplotlib>=3.8",
+  # flat.py writes DXF directly; CadQuery only pulls it in transitively
+  "ezdxf>=1.1",
 ]
 
 [project.optional-dependencies]

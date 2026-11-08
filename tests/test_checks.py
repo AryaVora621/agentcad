@@ -175,8 +175,10 @@ def test_only_filters_builtin_and_project_ids(copy_example):
 
 
 def test_builtin_ids_are_documented_in_the_gate_table():
-    assert set(BUILTIN_IDS) == {"valid", "single_solid", "watertight", "bed_fit", "bed_contact", "overhang",
-                                "min_wall", "interference"}
+    # Print gates first, then the flat (laser/CNC/waterjet) gates; a new gate must be added here on purpose.
+    assert BUILTIN_IDS == ("valid", "single_solid", "watertight", "bed_fit", "bed_contact", "overhang",
+                           "min_wall", "interference", "flat_profile", "sheet_fit", "min_feature", "inner_corners",
+                           "hole_size")
 
 
 def test_report_meta_names_the_tools_and_printer(broken_report):

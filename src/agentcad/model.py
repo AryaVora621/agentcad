@@ -8,6 +8,11 @@ from typing import Literal
 import cadquery as cq
 
 _NAME = re.compile(r"[a-z0-9_-]+")
+CUT_PROCESSES = ("laser", "cnc", "waterjet")
+
+
+class CutProcessError(ValueError):
+    """Part.cut is not a known cutting process; the project loader reports it as a config error (exit 2)."""
 
 
 @dataclass(frozen=True)
@@ -46,6 +51,8 @@ class Part:
     material: str | None = None
     color: str | None = None
     printed: bool = True
+    # A cut part is a 3D plate whose print frame is the cutting frame: sheet on z = 0, thickness along +z.
+    cut: Literal["laser", "cnc", "waterjet"] | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.name, str) or not _NAME.fullmatch(self.name):
@@ -58,6 +65,9 @@ class Part:
             raise ValueError(f"Part {self.name}: print must be a Pose or 'as-is'")
         if self.color is not None and not re.fullmatch(r"#[0-9a-fA-F]{6}", self.color):
             raise ValueError(f"Part {self.name}: color must look like '#rrggbb'")
+        if self.cut is not None and self.cut not in CUT_PROCESSES:
+            raise CutProcessError(f"Part {self.name}: cut must be 'laser', 'cnc', 'waterjet' or left out, got "
+                                  f"{self.cut!r}; fix the cut= argument in parts()")
 
     def solid(self, frame: Literal["model", "use", "print"] = "model") -> cq.Shape:
         """Return the part in a frame: its own ("model"), the assembly ("use") or on the bed ("print")."""
