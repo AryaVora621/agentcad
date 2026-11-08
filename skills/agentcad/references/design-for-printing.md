@@ -95,6 +95,31 @@ band) and with `min_wall` for the boss wall.
 - Keep the strain low; printed materials differ widely (PETG and nylon flex, PLA is brittle). Plan on a test print.
 - A latch overlaps its catch only at the barb along its travel. Test that with `ctx.slide`.
 
+### Sizing a snap
+
+- Cantilever strain at the root (the constant-section formula in the injection-moulding snap-fit design guides):
+  `strain = 1.5 * t * y / L^2`, with `t` the beam thickness in the bending
+  direction, `y` the deflection (the bump height for a simple catch) and `L` the free length. Example: t 1.2, y 0.45,
+  L 8 gives 1.5 * 1.2 * 0.45 / 64 = 1.3 percent.
+- Compare the strain with the yield strain (elongation at yield) on your filament's datasheet; agentcad ships no
+  material limits. Stay well below it for a snap that is used often, remember that a printed beam is weaker across
+  its layers than along them (lay the beam flat so it bends along the layers), and make the beam longer or thinner
+  before making the bump lower. A test print decides.
+- Bump height against wall flex: the bump must be taller than the clearance plus the print tolerance, or the lid
+  slides off. Start at 0.3 to 0.5 mm. Keep the wall behind the bump free to flex (a slit either side, or a
+  thinner wall), otherwise the bump bends nothing and the lid forces.
+- Match the groove to the bump: a groove as long as the bump removes the side play, so make it slightly longer than
+  the bump. Confirm with `ctx.slide` (non-zero overlap only at the bump) and `ctx.play`.
+- The force a snap needs is a bench check. agentcad measures geometry, not force.
+
+### Lid on a board: skirt outside
+
+A board that nearly fills the cavity (0.3 mm per side) leaves no room for a lid lip inside: the lip collides with
+the board or the wall. Put the lid's skirt outside the base instead: the lid cap is wider than the base by the skirt
+wall plus the side play, the skirt wraps the base from above, and the snap bumps sit on the inside of the skirt (or on
+flexing tabs cut by slits) and catch grooves in the base's outer wall. Check `ctx.interference` of the lid against
+the base and the board, and the side play with `ctx.play`.
+
 ## Bed contact and warping
 
 - Large flat footprints stick well but warp at corners in some materials. Round the corners of large plates.

@@ -28,6 +28,49 @@ Build the probe from the requirement, never from the model's own parameters. An 
 Use two measurements for a fit: `interference == 0` proves nothing collides, and a `distance` band proves the probe is
 actually near the feature rather than 14 mm away. Both are needed.
 
+## Probe patterns
+
+Four traps from real runs. Each pattern includes the break that proves the check.
+
+**Rectangular opening: width and height probes.** One distance band on a full-size probe still passes when the
+opening grows, because the probe keeps touching the edges that did not move (a 58 x 44 window grown to 60 wide still
+read 0 mm). Use two probes that each touch one pair of edges, plus a no-collision probe at full size:
+
+```python
+fit = cq.Workplane("XY").box(58, 44, 20).translate((-20, 0, 0))                 # the display, from the brief
+wide = cq.Workplane("XY").box(58, 30, 20).translate((-20, 0, 0))                # touches the left and right edges
+tall = cq.Workplane("XY").box(40, 44, 20).translate((-20, 0, 0))                # touches the top and bottom edges
+ctx.expect("window_fits", ctx.interference("front", fit), max=0.01, unit="mm3", part="front")
+ctx.expect("window_width_tight", ctx.distance("front", wide), max=0.3, part="front")
+ctx.expect("window_height_tight", ctx.distance("front", tall), max=0.3, part="front")
+```
+
+Grow the width to 60 and `window_width_tight` reads 1.0 mm and FAILs. A hole that is a loose fit works the same way
+(a band per axis). `ctx.section(...)["loop_list"]` gives each loop's `bbox_mm` and `hole`, which measures the
+opening from its own outline.
+
+**Lift-out and drop-in: the probe moves, the part stays.** `ctx.slide(moving, against, ...)` moves the first
+argument. For a ball that lifts out of a cradle, pass the ball first: `ctx.slide(ball, "mount", (0, 0, 1), distance=60)`.
+Passing the mount moves the part away from its own probe and reports a huge overlap that means nothing. The same goes
+for a cable, a card or a plug entering a slot.
+
+**Retention ("cannot roll off", "lid stays shut"): scan until free.** A single check in a raised pose is not
+retention: with the rim lowered by 2 mm it still passed, because the probe at the chosen height did not touch the
+lowered rim. Lift the probe in steps and report the first height with zero overlap:
+
+```python
+sweep = ctx.slide(ball, "mount", (0, 0, 1), distance=60, steps=120)
+free_at = next((s["offset_mm"] for s in sweep if s["overlap_mm3"] <= 0.01), 60.0)
+ctx.expect("ball_escape_lift", free_at, min=30.0, unit="mm", part="mount")      # must rise 30 mm before it is free
+```
+
+Each sweep entry is `{"offset_mm", "overlap_mm3"}`. Lower the rim and confirm the
+escape height drops below the limit. For a latch do the same along the opening direction.
+
+**Probe built from a model constant.** An 8 mm USB opening passed the "9 x 4 plug fits" check because the probe read
+the model's own `USB_W`, so probe and hole changed together. Type the brief's numbers into the probe (`9.0`, `4.0`),
+never `USB_W`. Add an oversize probe (`9.2 x 4.2` must collide) so an opening that grew also FAILs.
+
 ## Motion tests
 
 - Lid, drawer, sliding dovetail: `ctx.slide(moving, against, direction, distance, steps)` returns the overlap at each

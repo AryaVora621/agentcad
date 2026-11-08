@@ -23,13 +23,29 @@ agentcad view my-part                      # live viewer, for the human
 
 If agentcad MCP tools are available (`api`, `check`, `render`, `drawing`, ...), use them instead of shelling out.
 
+A complete `model.py` (the imports and the two functions agentcad looks for; `checks` is optional but never skip it):
+
+```python
+import cadquery as cq
+from agentcad import Part, Pose
+
+def parts():
+    body = cq.Workplane("XY").box(40, 30, 10, centered=(True, True, False))
+    body = body.cut(cq.Workplane("XY").center(10, 0).circle(2.2).extrude(10))     # 4.4 mm hole
+    return [Part("body", body, material="PETG", print=Pose(rx=0))]               # Part.use / Part.print are Poses
+
+def checks(ctx):
+    screw = cq.Workplane("XY").center(10, 0).circle(2.0).extrude(14).translate((0, 0, -2))   # brief: 4.0 mm shank
+    ctx.expect("screw_free", ctx.interference("body", screw), max=0.01, unit="mm3", part="body")
+```
+
 1. Write the checks for the brief first or while modelling (section 3).
 2. Run `agentcad check --json --brief`. It lists only the checks that are not PASS, groups the passing ones by id and
    adds a `hint` to each FAIL or WARN that says what to change. Read `summary`, `measured`, `limit`, `where`, `hint`.
 3. Fix the geometry at the location `where` names. Re-run. Do not edit a limit to make a FAIL go away unless the
    requirement itself changed.
-4. Run `agentcad render` and open `sheet.png` with an image-capable tool. Look at it before saying it looks right.
-   Renders find gross errors (missing feature, wrong side); they never prove thickness, clearance or overlap.
+4. Run `agentcad render` and open `sheet.png` with an image-capable tool. Renders find gross errors (missing
+   feature, wrong side); they never prove thickness, clearance or overlap.
 5. Repeat until all gates pass. Run `agentcad check` again after the last edit.
 
 Use the full report (`--json` without `--brief`) for the final check, and whenever you need the numbers of a PASS to
@@ -38,7 +54,7 @@ downward faces centred below `first_layer_mm` (default 0.3), reported as `first_
 
 ## 3. Turn requirements into checks
 
-Every functional requirement in the brief becomes a check in `checks(ctx)`. Probe solids (section 4) stand in for the
+Every functional requirement in the brief becomes a check in `checks(ctx)`; probe solids (section 4) stand in for the
 mating thing. All names below are the real API.
 
 A fit becomes a play measurement:
@@ -59,7 +75,6 @@ def checks(ctx):
 "An M4 screw goes through" becomes a probe cylinder that must not collide and must be close to the wall:
 
 ```python
-    import cadquery as cq
     screw = cq.Workplane("XY").circle(2.0).extrude(30).translate((10, 0, -5))  # 4.0 mm shank
     ctx.expect("screw_interference", ctx.interference("bracket", screw), max=0.01, unit="mm3", part="bracket")
     ctx.expect("screw_wall_gap", ctx.distance("bracket", screw), min=0.0, max=0.5, part="bracket")
@@ -79,14 +94,15 @@ size of the hand. If the probe reads the same variable the hole was built from, 
 Probes are `cq.Workplane` or `cq.Shape` objects already in the use frame. Place them with `.translate` and pass them
 anywhere a part name is accepted (`ctx.interference`, `ctx.distance`, `ctx.slide`, `ctx.play`).
 
+Four patterns that bit real runs (rectangular openings, lift-out with the probe moving, retention scans, probes
+read from model constants) are in `references/verification-playbook.md` under "Probe patterns". Read it before
+writing checks for a window, a lid, a cradle or a snap.
+
 ## 5. Prove a check can fail
 
-A check you have never seen fail is a guess. After writing it:
-
-1. Break the geometry (or the probe) in a way that must trip it: shift the hole 3 mm, shrink the clearance to 0,
-   make the probe 1 mm larger.
-2. Run `agentcad check`. Confirm that this check FAILs, on its own assertion, with the number you expected.
-3. Restore the geometry and confirm PASS.
+A check you have never seen fail is a guess. After writing it: break the geometry (or the probe) so it must trip
+(shift the hole 3 mm, clearance to 0, probe 1 mm larger); run `agentcad check` and confirm this check FAILs, on its own
+assertion, with the number you expected; restore and confirm PASS.
 
 If it passes while broken, the check measures the wrong thing. Fix the check before trusting any other result.
 
@@ -98,22 +114,31 @@ If it passes while broken, the check measures the wrong thing. Fix the check bef
 | use | the assembled pose, `Part.use` | `interference`, probes, `ctx.slide`, `ctx.play`, `build/assembly/` |
 | print | on the bed, z = 0 at the bottom, XY centred, `Part.print` rotation | `bed_fit`, `bed_contact`, `overhang`, `min_wall`, `watertight`, `build/stl/` |
 
-Set `Part.print = Pose(rx=180)` (or whatever rotation) so each part prints support-free and with layers along the
-load. Choose the face on the bed first, then check `overhang` in that frame. Bought parts get `printed=False`.
-Model parts in a convenient local frame and place them with `Part.use`.
+Set `Part.print = Pose(rx=180)` (or whatever rotation) so each part prints support-free with layers along the load;
+choose the bed face first, then check `overhang`. Bought parts get `printed=False`. Place parts with `Part.use`.
 
 ## 7. Reports, exit codes, diff and loose files
 
 Exit codes: 0 all pass (WARN allowed), 1 at least one FAIL, 2 usage or config error (including unknown keys in
-`agentcad.toml`), 3 the model code raised or produced no valid solid. Treat 2 and 3 as "no result", not as a pass.
+`agentcad.toml`), 3 the model code raised or produced no valid solid. Treat 2 and 3 as "no result", not as a pass,
+and so is a run with no JSON on stdout (the 1800 s stuck-boolean backstop prints a stack to stderr instead). A project
+check function that passes its 300 s budget becomes ERROR; a play probe that starts in contact reports 0 mm and
+`starts_in_contact`.
 
 `agentcad check --json` prints one document with `"schema": "agentcad.report/1"` and a `checks` list. Each check has
 `id`, `part`, `status` (PASS, WARN, FAIL, SKIP, ERROR), `summary`, `measured`, `limit`, `where`, and on a FAIL or WARN
 a `hint`. A project check that raises becomes ERROR and the run continues. Give your own failures a fix with
-`ctx.expect(..., hint="...")`.
+`ctx.expect(..., hint="...")`; a custom `summary=` keeps the measured value in the text.
 
-Compare builds with `agentcad diff OLD NEW` (two `manifest.json` files or two build folders; volume, bounding box,
-part set) to catch unintended changes after an edit. Copy `build/manifest.json` aside before a risky change.
+- `--brief` keeps the project checks that passed as `passed_checks` (`{"id", "part", "summary"}`, numbers included);
+  built-in passes stay folded in `passed`. Every `where` entry has `"frame": "print"` or `"use"`; read coordinates
+  in that frame. `ctx.section` returns `loop_list` (per loop `area_mm2`, `bbox_mm`, `perimeter_mm`, `hole`), so a
+  window or hole can be measured from its own outline.
+- `check` always rebuilds (meta `build_s` shows it, next to `elapsed_s`) and takes seconds to minutes. Batch your
+  mutation tests into few runs; run a long one in the background.
+
+Compare builds with `agentcad diff OLD NEW` (two `manifest.json` files or build folders: volume, bounding box, part
+set); copy `build/manifest.json` aside before a risky change.
 
 To review CAD you did not write, measure the files directly:
 
@@ -156,51 +181,40 @@ agentcad drawing my-part --json            # build/drawings/<part>.svg, .pdf, .p
 ```
 
 Every dimension is measured from the built solid (exact bounding box, circular edges), never from a parameter.
-Open the PNG and look at it. For numbers, read the JSON: each entry in `sheets[].dimensions` has `role`, `value_mm`
-and `count`, so compare them with the brief without reading pixels. Options: `--parts`, `--projection first|third`,
+Open the PNG. For numbers, read the JSON: `sheets[].dimensions` entries have `role`, `value_mm` and `count`. Options: `--parts`, `--projection first|third`,
 `--sheet A4|A3|letter|tabloid`. No tolerances, section views, slots or angles yet: do not call it a complete
 manufacturing drawing, and take clearances from `ctx.play`, not from the sheet.
 
 ## 10. When to stop
 
 Stop only when all of these hold:
-
 - all gates pass in the latest `agentcad check` run, run after your last edit;
 - every requirement in the brief has a check, and you have seen each one fail (section 5);
-- you looked at the renders (and the drawing PNG, if you made one);
+- you looked at the renders (and the drawing PNG, if any);
 - your summary quotes the measured numbers with units (clearance, wall p1, overhang area, bed fit);
 - you state the part count and anything left as a bench check (a snap force, a tolerance on the real printer,
   the real kerf on the real sheet, material behaviour).
 
 ## 11. Anti-patterns and the failures they caused
 
-- Reading parameters instead of the built shape. A worker reported PASS on a sliding dovetail clearance while the
-  part sat 14 mm outside its groove, because its check read the parameters.
-- Skipping the print frame. A plate was modelled to print face down with about 6100 mm2 of unsupported ceiling,
-  because overhang was never checked in the print orientation.
-- Skipping pairwise interference. Two parts overlapped by 50 cm3 in the assembly, because nobody ran interference in
-  the use pose.
-- Coarse export tolerance. A coarse STL export of a revolved part produced a facet that sliced a 2.0 mm wall at
-  1.5 mm. Fix: export tolerance 0.02 mm, angular tolerance 0.05 rad (the defaults in `[export]`).
-- Unmeasured prose. A design doc stated an outer diameter of 29 to 33.5 mm while the model measured 19 mm. Measure
-  every number you write into prose.
-- Gating only on "it builds". A rebuild passed its only gate while every internal channel was sealed and a spout was
-  solid. Trace the functional path: sweep a probe along the water, cable or air route.
-- Checking only the whole. An assembly was stable overall while one loose stage alone tipped at 6 degrees. Check each
-  loose sub-stack.
-- Trusting a stale report. A gate report was stale because the build crashed after the old report was written.
-  agentcad builds atomically, but still compare report timestamps with your last edit and re-run after every edit.
-- Trusting the picture. A clean render hid all of the above.
-- Treating a cut part like a print. Pockets and engraving cannot be cut straight through, and a sheet slot sized
-  without the kerf closes up or comes out loose; run the flat gates and measure the joint.
+- Reading parameters instead of the built shape: PASS on a dovetail clearance while the part sat 14 mm outside its groove.
+- Skipping the print frame: a plate with about 6100 mm2 of unsupported ceiling, because overhang was never checked
+  in the print orientation.
+- Skipping pairwise interference: two parts overlapped by 50 cm3 in the assembly.
+- Coarse export tolerance: a coarse STL of a revolved part sliced a 2.0 mm wall at 1.5 mm. Keep `[export]` at
+  0.02 mm and 0.05 rad (the defaults).
+- Unmeasured prose: a design doc said outer diameter 29 to 33.5 mm while the model measured 19 mm.
+- Gating only on "it builds": every internal channel was sealed and a spout was solid. Sweep a probe along the route.
+- Checking only the whole: an assembly was stable while one loose stage alone tipped at 6 degrees.
+- Trusting a stale report or a clean render. Re-run after every edit; renders hide overlaps, thin walls and sealed channels.
+- Treating a cut part like a print: pockets cannot be cut straight through, and a slot sized without the kerf
+  closes up or comes out loose.
+- A weak probe: one distance band on a window probe, or a probe read from `USB_W`, passes while the geometry is wrong.
 
 ## 12. References
 
-- [references/design-for-printing.md](references/design-for-printing.md): read before choosing orientation, wall
-  thickness, fits, screw holes or snap features for an FDM part.
-- [references/cut-parts.md](references/cut-parts.md): read before designing a laser, CNC or waterjet part: kerf and
-  fits, minimum features, CNC corners, tab-and-slot joints, sheet sizes and the check for each.
-- [references/cadquery-patterns.md](references/cadquery-patterns.md): read when a CadQuery operation fails, returns an
-  unexpected shape, or you need selectors, shells, fillets or probe solids.
-- [references/verification-playbook.md](references/verification-playbook.md): read when planning checks for a brief,
-  testing motion or function, or reviewing another agent's CAD.
+- [design-for-printing.md](references/design-for-printing.md): orientation, walls, fits, screws, snap fits, lids.
+- [cut-parts.md](references/cut-parts.md): laser, CNC, waterjet: kerf, minimum features, corners, tab-and-slot, sheets.
+- [cadquery-patterns.md](references/cadquery-patterns.md): a failing operation, selectors, shells, fillets, poles and seams.
+- [verification-playbook.md](references/verification-playbook.md): planning checks, probe patterns, motion tests,
+  reviewing another agent's CAD.

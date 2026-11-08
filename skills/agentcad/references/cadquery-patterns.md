@@ -97,6 +97,25 @@ Revolved and lofted surfaces have seams. When they are exported to STL, a coarse
 walls. Keep `[export]` at `tolerance = 0.02` and `angular_tolerance = 0.05`, and check the wall gate on the exported
 mesh. Lofts between very different profiles can twist; keep the same number of segments in each section.
 
+### Watertight failures at poles and tangent seams
+
+A revolved or spherical cavity can export a mesh with an open edge, and `watertight` FAILs even though no face is
+coincident (zero-thickness-face advice does not apply). The usual causes:
+
+- **Pole.** A revolve profile that ends exactly on the axis, or a sphere cut whose pole sits on a face, leaves a
+  degenerate vertex. Stop the profile off the axis with a small flat (a 3 to 6 mm flat floor), or close it with a
+  line to the axis and revolve once.
+- **Tangent seam.** A sphere meeting a cylinder at its equator, or a fillet meeting a face tangentially, is a seam
+  the mesher splits badly. Shift one by 0.01 to 0.05 mm, or end the cylinder a little before the equator and let
+  the sphere continue below it.
+- **Revolve on the wrong plane.** Revolving on "XY" about the Y axis gives a sideways cavity (a huge overhang and
+  interference). Draw the profile on "XZ" and revolve about its local Y axis (`axisStart=(0, 0, 0)`, `axisEnd=(0, 1, 0)`),
+  which is the global Z axis; check the result with a section.
+
+To find the open edge, load `build/stl/<part>.stl` with trimesh (if installed) and list `mesh.edges` not shared by two faces
+(`trimesh.grouping.group_rows(mesh.edges_sorted, require_count=1)`). Re-run `agentcad check` for the full rebuild after
+each fix.
+
 ## Real arcs and circles
 
 Use `circle`, `ellipse`, `threePointArc`, `radiusArc`, `fillet2D`, not polylines that approximate curves. A polygon
