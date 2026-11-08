@@ -24,7 +24,8 @@ All notable changes to this project are documented here. The format follows
   scales, hole callouts and positions, title block, byte-identical output for the same input).
 - MCP server (`agentcad mcp`, extra `agentcad[mcp]`): 15 tools mirroring the CLI, renders and drawings returned as
   images, the skill as a prompt and resources, `--root` confinement. CadQuery stays loaded, so a repeat `check` of
-  examples/bracket took about 1.1 s against 3.9 s for a cold CLI run on the development Mac. See
+  examples/bracket runs about 3.5 to 4 times faster than a cold CLI run (1.1 s against 3.9 s on a quiet development
+  Mac; 2.7 s against 10.7 s while other jobs loaded it). See
   [docs/mcp.md](docs/mcp.md).
 - `llms.txt` for agents that read a project index.
 
