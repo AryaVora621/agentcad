@@ -307,3 +307,15 @@ def test_view_starts_and_restarts_the_viewer(tmp_path):
     url = doc_of(first)["url"]
     assert url.startswith("http://127.0.0.1:") and doc_of(same)["url"] == url
     assert none.is_error
+
+
+def test_pinned_sdk_still_has_the_internals_the_server_uses():
+    # mcp_server.py feeds its own streams through _lowlevel_server and trims schemas through _tool_manager; the
+    # extra is capped below mcp 2.4 because a release may rename them, and _slim_schemas would skip silently.
+    from agentcad.mcp_server import build_server
+
+    server = build_server()
+    assert hasattr(server._lowlevel_server, "run") and hasattr(server._lowlevel_server, "create_initialization_options")
+    tools = server._tool_manager.list_tools()
+    assert len(tools) == 15
+    assert all("title" not in json.dumps(t.parameters) for t in tools)  # the schema trim actually ran
