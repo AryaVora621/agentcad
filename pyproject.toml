@@ -53,3 +53,7 @@ markers = ["render: needs offscreen VTK rendering", "slow: takes more than a few
 [tool.ruff]
 line-length = 120
 target-version = "py311"
+
+# Ship the skill so `agentcad skill install` works from a pip or uv install, not only from a checkout.
+[tool.hatch.build.targets.wheel.force-include]
+"skills/agentcad" = "agentcad/_skill"

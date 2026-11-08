@@ -1,0 +1,28 @@
+# agentcad
+
+> agentcad is CAD for AI agents. You model parts in code with CadQuery, and agentcad builds them and measures the built solids (validity, watertightness, printer bed fit, overhang, wall thickness, interference, clearances and motion) so a claim like "it fits" is backed by a number instead of a parameter. It ships a CLI with JSON reports and exit codes, renders and a live viewer, and an agent skill for Claude Code, Codex and Cursor.
+
+## Quick start for agents
+
+1. Install: `uv tool install agentcad` (Python 3.11 or newer).
+2. Teach your agent the loop: `agentcad skill install` (use `--host codex`, `--host cursor` or `--host agents-md` for other tools).
+3. Read the full command, helper and gate list in one document: `agentcad api --json`.
+4. Run the loop: `agentcad new my-part`, edit `my-part/model.py` and `my-part/agentcad.toml`, then `agentcad check my-part --json --brief`. Fix the geometry where a FAIL says (`where`), render with `agentcad render my-part`, look at the sheet, and check again.
+
+## Docs
+
+- [README](https://github.com/AryaVora621/agentcad/blob/main/README.md): what agentcad is and a first project.
+- [Getting started](https://github.com/AryaVora621/agentcad/blob/main/docs/getting-started.md): install and the first check.
+- [CLI reference](https://github.com/AryaVora621/agentcad/blob/main/docs/cli.md): every command, flag and exit code.
+- [Report schema](https://github.com/AryaVora621/agentcad/blob/main/docs/report-schema.md): the JSON documents agents read.
+- [Architecture](https://github.com/AryaVora621/agentcad/blob/main/docs/ARCHITECTURE.md): how the modules fit together.
+- [MCP server](https://github.com/AryaVora621/agentcad/blob/main/docs/mcp.md): run agentcad as an MCP tool server (new in 0.2).
+- [Flat parts and gates](https://github.com/AryaVora621/agentcad/blob/main/docs/flat.md): sheet and laser-cut parts (new in 0.2).
+- [Drawings](https://github.com/AryaVora621/agentcad/blob/main/docs/drawings.md): dimensioned 2D drawings (new in 0.2).
+
+## Agent skill
+
+- [SKILL.md](https://github.com/AryaVora621/agentcad/blob/main/skills/agentcad/SKILL.md): the loop, the core rule and how to turn a brief into checks.
+- [Design for printing](https://github.com/AryaVora621/agentcad/blob/main/skills/agentcad/references/design-for-printing.md): orientation, walls, fits, screw holes, snaps.
+- [CadQuery patterns](https://github.com/AryaVora621/agentcad/blob/main/skills/agentcad/references/cadquery-patterns.md): selectors, shells, fillets, probe solids.
+- [Verification playbook](https://github.com/AryaVora621/agentcad/blob/main/skills/agentcad/references/verification-playbook.md): planning checks and reviewing other agents' CAD.
