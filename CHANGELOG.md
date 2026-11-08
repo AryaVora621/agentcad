@@ -28,6 +28,9 @@ All notable changes to this project are documented here. The format follows
   Mac; 2.7 s against 10.7 s while other jobs loaded it). See
   [docs/mcp.md](docs/mcp.md).
 - `llms.txt` for agents that read a project index.
+- `examples/quadcopter`: a 5-inch FPV frame with two CNC carbon plates, four printed arms and measured stand-ins
+  (motors, props, stack, camera, battery); project checks for prop tip gap, swept-disc clearance, motor and stack screw
+  patterns and CNC corner radius.
 
 ### Changed
 - The agent skill leads with the brief loop, `agentcad api` and the cut-part and drawing workflows, and gains

@@ -1,5 +1,6 @@
 """A laser-cut 3 mm plywood panel with a small 3D-printed bracket that screws to it."""
 import cadquery as cq
+
 from agentcad import Part, Pose
 
 PANEL_W, PANEL_H, PANEL_T = 200.0, 120.0, 3.0

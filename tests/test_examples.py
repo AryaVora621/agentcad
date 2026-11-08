@@ -34,7 +34,7 @@ def test_sources_contain_no_em_dashes():
 
 
 # Examples that must check clean, with the exit code `agentcad check` is expected to return.
-CHECKED_EXAMPLES = [("flat_panel", 0)]
+CHECKED_EXAMPLES = [("flat_panel", 0), ("quadcopter", 0)]
 
 
 @pytest.mark.parametrize("example, expected_exit", CHECKED_EXAMPLES)

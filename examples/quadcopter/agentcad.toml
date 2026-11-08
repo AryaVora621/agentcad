@@ -1,0 +1,23 @@
+[project]
+name = "quadcopter"
+module = "model.py"
+
+[printer]
+profile = "generic-256"
+
+[checks]
+# PETG arms with a 0.4 mm nozzle: five perimeters at least, so nothing thinner than 2 mm counts as solid.
+min_wall_mm = 2.0
+max_overhang_deg = 45
+overhang_allow_mm2 = 25
+
+[flat]
+# A 200 x 300 mm offcut of carbon sheet on a hobby router. The shop's CAM offsets the toolpath by the endmill, so
+# the DXF stays nominal (no kerf compensation) and kerf_mm only guards against slots that close up.
+sheet = [300, 200]
+kerf_mm = 0.1
+min_feature_mm = 1.5
+tool_diameter_mm = 3.175
+# A 3.4 mm M3 hole in 4 mm carbon is 0.85 of the thickness; a router cannot drill finer than its bit anyway.
+min_hole_ratio = 0.8
+compensate_kerf = false
