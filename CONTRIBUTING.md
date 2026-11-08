@@ -39,3 +39,8 @@ agentcad is offered under the PolyForm Noncommercial License 1.0.0 and, separate
 By submitting a contribution you confirm that you wrote it or have the right to submit it, and you grant the author
 a perpetual, worldwide, royalty-free license to use, modify and relicense it as part of agentcad under both of those
 models. Say so in the pull request if you cannot agree to this before you open it.
+
+## Changing the agent skill
+
+Run the fresh-agent evals in [evals/](evals/README.md) before and after a skill change, and turn every friction
+item they report into a fix (code with a test, or skill text).
