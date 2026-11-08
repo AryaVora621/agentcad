@@ -80,6 +80,8 @@ def _parser() -> argparse.ArgumentParser:
     p.add_argument("project", nargs="?", default=".", metavar="PROJECT")
     p.add_argument("--only", metavar="ID,ID", help=f"run only these check ids (built-in: {', '.join(BUILTIN_IDS)})")
     p.add_argument("--no-build", action="store_true", help="reuse build/ if it is fresh, else exit 2")
+    p.add_argument("--brief", action="store_true",
+                   help="only checks that need attention, with fix hints, plus totals (token-lean for agents)")
 
     p = add("measure", _measure, "bbox, volume, area, centre of mass of STEP or mesh files")
     p.add_argument("files", nargs="+", metavar="FILE")
@@ -131,12 +133,70 @@ def _parser() -> argparse.ArgumentParser:
 
     add("printers", _printers, "list printer profiles")
     add("doctor", _doctor, "check versions, offscreen rendering and write access")
+
+    # -- drawing (owned by drawing.py) --
+    p = add("drawing", _drawing, "dimensioned 2D drawings (SVG, PDF, PNG) from the measured geometry")
+    p.add_argument("inputs", nargs="*", metavar="PROJECT|FILE", help="a project folder or STEP files (default .)")
+    p.add_argument("-o", "--out", metavar="DIR", help="default PROJECT/build/drawings, or ./drawings for files")
+    p.add_argument("--parts", metavar="NAME,NAME", help="only these parts of a project")
+    p.add_argument("--format", default="svg,pdf,png", metavar="FMT,FMT", help="any of svg, pdf, png")
+    p.add_argument("--projection", choices=("third", "first"), default="third",
+                   help="third-angle (US, default) or first-angle (ISO/EU) view layout")
+    p.add_argument("--sheet", choices=("auto", "A4", "A3", "letter", "tabloid"), default="auto")
+    # -- end drawing --
+
+    # -- api (owned by api.py) --
+    add("api", _api, "everything an agent needs in one document: commands, ctx helpers, config keys, gates")
+    # -- end api --
+
+    # -- skill (owned by skill_install.py) --
+    p = add("skill", _skill, "install, show or locate the agentcad agent skill")
+    p.add_argument("action", choices=("install", "show", "path"))
+    p.add_argument("--host", choices=("claude", "codex", "cursor", "agents-md"), default="claude",
+                   help="which agent to install for (default claude)")
+    p.add_argument("--project", metavar="DIR", help="install into this project instead of your home folder")
+    p.add_argument("--link", action="store_true", help="symlink instead of copying (stays current with this install)")
+    p.add_argument("--force", action="store_true", help="replace a different existing install")
+    p.add_argument("--reference", metavar="NAME", help="with show: print one reference file instead of SKILL.md")
+    # -- end skill --
+
+    # -- mcp (owned by mcp_server.py) --
+    p = add("mcp", _mcp, "run the MCP server on stdio (needs the 'mcp' extra)", json_flag=False)
+    p.add_argument("--root", metavar="DIR", help="refuse paths outside this folder")
+    # -- end mcp --
     return parser
 
 
+def _drawing(args: argparse.Namespace) -> int:
+    from .drawing import cli
+
+    return cli(args)
+
+
+def _api(args: argparse.Namespace) -> int:
+    from .api import cli
+
+    return cli(args)
+
+
+def _skill(args: argparse.Namespace) -> int:
+    from .skill_install import cli
+
+    return cli(args)
+
+
+def _mcp(args: argparse.Namespace) -> int:
+    from .mcp_server import cli
+
+    return cli(args)
+
+
 def _emit(args: argparse.Namespace, report: Report, extra: Sequence[str] = ()) -> int:
+    brief = getattr(args, "brief", False)
     if args.json:
-        print(report.to_json())
+        print(report.to_json(view="brief" if brief else "full"))
+    elif brief:
+        print(report.to_brief_table())
     else:
         lines = report.to_table().splitlines()
         # Extra detail lines (wall bands) sit under the per-file rows, above the totals line.

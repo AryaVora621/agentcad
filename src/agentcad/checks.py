@@ -9,13 +9,15 @@ from itertools import combinations
 import cadquery as cq
 
 from . import __version__, measure, printability
+from .flat import FLAT_IDS, flat_gates
 from .geometry import is_valid, solids_count, to_shape, volume
 from .project import BuildResult, Project
 from .report import Check, Report, Status
 from .wall import wall_thickness
 
-BUILTIN_IDS = ("valid", "single_solid", "watertight", "bed_fit", "bed_contact", "overhang", "min_wall",
-               "interference")
+PRINT_IDS = ("valid", "single_solid", "watertight", "bed_fit", "bed_contact", "overhang", "min_wall",
+             "interference")
+BUILTIN_IDS = PRINT_IDS + FLAT_IDS
 WALL_SAMPLES = 40000
 # bed_contact warns below this share of the footprint or this absolute area (mm2).
 MIN_CONTACT_SHARE, MIN_CONTACT_MM2 = 0.01, 20.0
@@ -135,7 +137,8 @@ def _builtin(ctx: CheckContext, wanted: set[str] | None) -> list[Check]:
         return wanted is None or id in wanted
 
     parts = list(project.parts.values())
-    printed = [p for p in parts if p.printed]
+    # Cut (laser, CNC, waterjet) parts get the flat gates instead of the 3D printing gates.
+    printed = [p for p in parts if p.printed and getattr(p, "cut", None) is None]
     if on("valid"):
         out += [c for p in parts for c in _guard("valid", p.name, lambda p=p: [_valid(p.name, ctx.solid(p.name, "model"))])]
     if on("single_solid"):
@@ -159,6 +162,7 @@ def _builtin(ctx: CheckContext, wanted: set[str] | None) -> list[Check]:
             out += _guard("interference", f"{a.name}+{b.name}", lambda a=a, b=b: [
                 _interference(a.name, b.name, ctx.solid(a.name), ctx.solid(b.name),
                               cfg["interference_tol_mm3"], frozenset((a.name, b.name)) in allowed)])
+    out += flat_gates(ctx, wanted)
     return out
 
 

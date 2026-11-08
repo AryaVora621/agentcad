@@ -50,11 +50,16 @@ class Check:
     measured: dict = field(default_factory=dict)
     limit: dict = field(default_factory=dict)
     where: list[dict] = field(default_factory=list)
+    # How to fix it, for FAIL and WARN; omitted from JSON when None so older readers see the same keys.
+    hint: str | None = None
 
     def to_dict(self) -> dict:
         """Return the JSON-ready form."""
-        return json_value({"id": self.id, "part": self.part, "status": self.status, "summary": self.summary,
-                           "measured": self.measured, "limit": self.limit, "where": self.where})
+        document = {"id": self.id, "part": self.part, "status": self.status, "summary": self.summary,
+                    "measured": self.measured, "limit": self.limit, "where": self.where}
+        if self.hint is not None:
+            document["hint"] = self.hint
+        return json_value(document)
 
 
 @dataclass
@@ -82,12 +87,20 @@ class Report:
         """Number of checks per status."""
         return {s.value.lower(): sum(c.status is s for c in self.checks) for s in Status}
 
-    def to_json(self) -> str:
-        """Serialise as one JSON document."""
+    def to_json(self, view: str = "full") -> str:
+        """Serialise as one JSON document; view "brief" is the token-lean form for agents."""
+        if view == "brief":
+            raise NotImplementedError("brief view lands with the lean-output work")
+        if view != "full":
+            raise ValueError(f"unknown report view {view!r}; use 'full' or 'brief'")
         document = {"schema": SCHEMA, "tool": self.tool, "project": self.project, "status": self.status(),
                     "exit_code": self.exit_code(), "counts": self.counts(),
                     "checks": [c.to_dict() for c in self.checks], "meta": self.meta}
         return json.dumps(json_value(document), indent=2, allow_nan=False)
+
+    def to_brief_table(self) -> str:
+        """Only the checks that need attention, with hints, then the totals line."""
+        raise NotImplementedError("brief table lands with the lean-output work")
 
     def to_table(self) -> str:
         """One line per check, then a totals line."""

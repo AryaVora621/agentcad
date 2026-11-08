@@ -27,11 +27,14 @@ dependencies = [
   "rtree",
   "scipy",
   "manifold3d",
+  "matplotlib>=3.8",
 ]
 
 [project.optional-dependencies]
 # ruff is pinned to a minor version because its default rule set changes between releases
 dev = ["pytest>=8", "ruff>=0.17,<0.18"]
+# the MCP server is optional so the CLI does not pull in an HTTP/async stack
+mcp = ["mcp>=2.3,<3"]
 
 [project.scripts]
 agentcad = "agentcad.cli:main"
